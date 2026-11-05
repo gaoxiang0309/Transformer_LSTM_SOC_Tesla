@@ -1,0 +1,16 @@
+{
+  "python": "3.10.12",
+  "torch": "2.14.1+cu130",
+  "numpy": "2.2.6",
+  "device": "cuda:1",
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "manifest_sha256": "7363e49a4f9bf59f896dbcd552474c33c5b9e0d0a60e533dff7df67f6e15f22e",
+  "boundary_status": "source_file",
+  "state_filter": "driving_only",
+  "sampling_interval_s": 1.0,
+  "window_seconds": {
+    "long": 300.0,
+    "short": 60.0
+  },
+  "smoke": false
+}
