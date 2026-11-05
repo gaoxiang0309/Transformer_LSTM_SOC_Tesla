@@ -10,6 +10,18 @@
   "max_gap_seconds": 60.0,
   "use_ah_feature": true,
   "capacity_ah": 4.5,
+  "capacity_by_temperature": {
+    "-20C": 4.209,
+    "-10C": 4.241,
+    "0C": 4.284,
+    "10C": 4.361,
+    "25C": 4.479,
+    "40C": 4.583
+  },
+  "ah_norm_low": -1.2,
+  "ah_norm_high": 0.2,
+  "use_physics_anchor": true,
+  "use_delta_ah": true,
   "sample_interval_s": 1.0,
   "long_window_seconds": 300.0,
   "short_window_seconds": 60.0,

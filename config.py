@@ -44,6 +44,28 @@ class Config:
     use_ah_feature: bool = True
     capacity_ah: float = 4.5  # Tesla 2170 额定容量
     input_features: int = 4  # 由 use_ah_feature 在 validate() 中确定（3或4）
+    # 温度相关容量表（由m80训练集按 SOC~Ah 斜率拟合），用于把Ah换算到SOC单位。
+    # capacity_by_temperature 为实际可用容量(Ah)；scale=capacity_ah/C(T)。
+    capacity_by_temperature: dict = field(
+        default_factory=lambda: {
+            "-20C": 4.209,
+            "-10C": 4.241,
+            "0C": 4.284,
+            "10C": 4.361,
+            "25C": 4.479,
+            "40C": 4.583,
+        }
+    )
+    # Ah特征的固定归一化范围（容量比例），prepare与融合阶段共用。
+    ah_norm_low: float = -1.2
+    ah_norm_high: float = 0.2
+    # A：物理锚 + 残差输出。anchor = Q0 + scale(T)*Ah，Q0由段首q反推；
+    # LSTM只学习 anchor 之外的残差。
+    use_physics_anchor: bool = True
+    # C：给LSTM增加短窗ΔAh特征（短窗60s与长窗300s的安时变化）。
+    use_delta_ah: bool = True
+    # LSTM输入维度 = 输入特征 + q + (锚) + (2个ΔAh)，由validate()派生。
+    lstm_input_features: int = 0
     # 归一化只在训练划分上拟合。
     # robust_minmax：每通道p0.01–p99.99截断后min-max到[0,1]；
     # zscore：训练集均值/标准差标准化，不截断。
@@ -116,8 +138,21 @@ class Config:
             raise ValueError("max_gap_seconds不能为负")
         if self.capacity_ah <= 0:
             raise ValueError("capacity_ah必须为正")
+        if self.ah_norm_high <= self.ah_norm_low:
+            raise ValueError("ah_norm_high必须大于ah_norm_low")
+        if any(value <= 0 for value in self.capacity_by_temperature.values()):
+            raise ValueError("capacity_by_temperature中的容量必须为正")
+        if (self.use_physics_anchor or self.use_delta_ah) and not self.use_ah_feature:
+            raise ValueError("物理锚和ΔAh特征要求use_ah_feature=True")
         # 输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
         self.input_features = 4 if self.use_ah_feature else 3
+        # LSTM列顺序：[输入特征..., q, anchor, dAh_K, dAh_L]，按开关拼列。
+        self.lstm_input_features = (
+            self.input_features
+            + 1
+            + (1 if self.use_physics_anchor else 0)
+            + (2 if self.use_delta_ah else 0)
+        )
         # 窗口按秒定义：点数 = 秒数 / 采样间隔，四舍五入到整数点。
         self.long_window = max(1, int(round(self.long_window_seconds / self.sample_interval_s)))
         self.short_window = max(1, int(round(self.short_window_seconds / self.sample_interval_s)))

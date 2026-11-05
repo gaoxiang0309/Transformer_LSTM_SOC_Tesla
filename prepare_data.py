@@ -26,9 +26,6 @@ TEMPERATURES = ("-20C", "-10C", "0C", "10C", "25C", "40C")
 FEATURE_NAMES = ["Voltage", "Current", "Battery_Temp_degC"]
 # 第4维安时积分特征的名称（由电流积分得到，不在原始MAT列中）。
 AH_FEATURE_NAME = "Ah_integral"
-# 安时积分的固定归一化范围（额定容量比例）；覆盖满放与少量回馈积累。
-AH_NORM_LOW = -1.2
-AH_NORM_HIGH = 0.2
 # 判定“静置/驻车”的电流阈值（安培）。只用于切长驻车，不用于状态分类。
 PARKING_CURRENT_A = 0.05
 # 1 Hz重采样的最小间隔（秒）：时间差小于它的行视为重复突发，只保留第一个。
@@ -127,8 +124,8 @@ def fit_normalizer(x_train, cfg):
     high = np.percentile(x_train, 100.0 - cfg.clip_percentile, axis=0)
     if cfg.use_ah_feature:
         # 安时积分用固定物理尺度（额定容量比例），避免测试段深放电/回馈被训练分位数截断。
-        low[-1] = AH_NORM_LOW
-        high[-1] = AH_NORM_HIGH
+        low[-1] = cfg.ah_norm_low
+        high[-1] = cfg.ah_norm_high
     mean = x_train.mean(axis=0)
     std = x_train.std(axis=0)
     # 常数通道的标准差置1，避免z-score除零。
@@ -393,7 +390,12 @@ def prepare(cfg, output=None):
         source_root=str(root),
         features=feature_names,
         feature_order="V,I,T,Ah" if cfg.use_ah_feature else "V,I,T",
-        ah_feature=dict(used=cfg.use_ah_feature, capacity_ah=cfg.capacity_ah),
+        ah_feature=dict(
+            used=cfg.use_ah_feature,
+            capacity_ah=cfg.capacity_ah,
+            norm_low=cfg.ah_norm_low,
+            norm_high=cfg.ah_norm_high,
+        ),
         target="author_SOC_fraction",
         sampling_interval_s=cfg.sample_interval_s,
         window_seconds=dict(long=cfg.long_window_seconds, short=cfg.short_window_seconds),

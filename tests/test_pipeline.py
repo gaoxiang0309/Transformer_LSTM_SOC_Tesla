@@ -94,7 +94,7 @@ class PipelineTests(unittest.TestCase):
         )
         lstm = LSTMSOC(self.cfg)
         self.assertEqual(
-            tuple(lstm(torch.randn(2, 4, self.cfg.input_features + 1)).shape), (2,)
+            tuple(lstm(torch.randn(2, 4, self.cfg.lstm_input_features)).shape), (2,)
         )
 
     def test_checkpoint_roundtrip(self):

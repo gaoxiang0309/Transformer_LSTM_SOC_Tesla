@@ -164,9 +164,29 @@ def train_model(model, train, validation, cfg, run, stage, device, transformer_s
     return model
 
 
-def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, checkpoint_sha=""):
-    """冻结Transformer，按时间顺序生成q并拼成[输入特征,q]序列，返回Sequence列表。
+def _capacity_for_sequence(name, cfg):
+    """按序列名中的温度标签查容量表；找不到时回退到额定容量。
 
+    长键优先匹配，避免"0C"误匹配"10C"/"40C"/"-10C"。
+    """
+    for key in sorted(cfg.capacity_by_temperature, key=len, reverse=True):
+        if key in name:
+            return float(cfg.capacity_by_temperature[key])
+    return float(cfg.capacity_ah)
+
+
+def _rolling_delta(values, window):
+    """返回 values[t]-values[t-window+1]；前 window-1 个点置0。"""
+    out = np.zeros(len(values), dtype=np.float64)
+    if window > 1 and len(values) >= window:
+        out[window - 1 :] = values[window - 1 :] - values[: -window + 1]
+    return out
+
+
+def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, checkpoint_sha=""):
+    """冻结Transformer生成q，并拼接物理锚与ΔAh特征，返回Sequence列表。
+
+    列顺序：[V,I,T,Ah, q, anchor, dAh_K, dAh_L]（按开关拼接）。
     每个q[s]独立使用[s-L+1,s]，不一次编码整段后回取历史位置。
     新序列会裁去L-1个无初估的点，offset同步更新。
     """
@@ -188,7 +208,26 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
         q = np.concatenate(predictions).astype("float32")
         first = cfg.long_window - 1
         # q[0]实际对应原记录的first点，故V/I/T与标签也必须从first裁切。
-        x = np.column_stack([sequence.x[first:], q]).astype("float32")
+        base_x = sequence.x[first:]
+        x = np.column_stack([base_x, q]).astype("float32")
+        if cfg.use_physics_anchor:
+            # Ah在prepare中按固定范围归一化，这里反算回容量比例。
+            ah_raw = base_x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
+            capacity = _capacity_for_sequence(sequence.name, cfg)
+            scale = cfg.capacity_ah / capacity
+            coulomb = scale * ah_raw
+            # 用段首q反推段首SOC，再沿Ah累计给出整段物理锚。
+            anchor = (float(q[0]) - float(coulomb[0])) + coulomb
+            x = np.column_stack([x, anchor]).astype("float32")
+        if cfg.use_delta_ah:
+            ah_raw = base_x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
+            d_short = _rolling_delta(ah_raw, cfg.short_window)
+            d_long = _rolling_delta(ah_raw, cfg.long_window)
+            x = np.column_stack([x, d_short, d_long]).astype("float32")
+        if x.shape[1] != cfg.lstm_input_features:
+            raise ValueError(
+                f"融合特征列数{x.shape[1]}与lstm_input_features={cfg.lstm_input_features}不一致"
+            )
         # offset记录裁切前的原行号，便于最后把预测映射回原记录。
         fused = Sequence(
             sequence.name, x, sequence.y[first:].copy(), sequence.offset + first, sequence.source
