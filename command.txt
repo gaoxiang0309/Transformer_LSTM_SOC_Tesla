@@ -1,0 +1,41 @@
+# Transformer-LSTM SOC（Tesla 2170 行车SOC）服务器命令
+# 当前版本：窗口 300 s/60 s；第一阶段 d_model=16、3 层、d_ff=128、dropout=0.15、lr=5e-4
+
+# 0) 进入项目并激活环境
+cd ~/projects/Transformer_LSTM_SOC_Tesla
+conda activate Transformer_LSTM_SOC
+
+# 1) 环境自检（能打印版本和 True 即可）
+python -c "import torch,numpy;print(torch.__version__, torch.cuda.is_available())"
+
+# 2) 数据：仓库已带 data/processed（300 s/60 s，输入 V/I/T/Ah），一般跳过本步。
+#    只有改窗口/归一化/状态过滤时才需要重跑；已有 manifest 会拒绝覆盖，
+#    需先把旧 data/processed 移走，或用 --output 指定新目录并在配置里改 processed_dir。
+#    原始数据默认找 ../公开数据集/Tesla_Model3_2170/解压数据与工具；
+#    不在该路径时追加 --source "<Tesla_解压数据与工具路径>"
+# python prepare_data.py --config configs/tesla_start.json
+
+# 3) 流程自检（会生成 run/train/exp）
+python -m unittest discover -s tests -v
+python main.py --smoke
+python test.py --run run/train/exp
+
+# 4) 正式训练（以打印的 RUN_DIR 为准；先跑过 smoke 通常是 run/train/exp1）
+python main.py --config configs/tesla_start.json --device cuda:1 2>&1 | tee run_train.log
+
+# 5) 独立测试
+RUN_DIR=run/train/exp1
+python test.py --run "$RUN_DIR" --device cuda:0 2>&1 | tee run_test.log
+
+# 6) 绘图 + 分组汇总
+python plot_results.py --test-dir "$RUN_DIR/test"
+python tools/summarize_predictions.py --test-dir "$RUN_DIR/test"
+
+# 7) 查看汇总指标
+python - <<'PY'
+import json
+m = json.load(open("run/train/exp1/test/metrics.json", encoding="utf-8"))
+print("Transformer:", m["aggregate_transformer"])
+print("Collaborative:", m["aggregate_collaborative"])
+print("coverage:", m["coverage_ratio"], "windows:", m["prediction_windows"])
+PY

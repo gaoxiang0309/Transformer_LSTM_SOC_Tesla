@@ -1,0 +1,10 @@
+{
+  "source": "C:\\Users\\25499\\Desktop\\PyTorch深度学习实践\\源码\\Transformer-pytorch\\model\\tf_model.py",
+  "sha256": "f3e681590d1f2d00670c1eb655a364d0733fc59e0120972e2356fef7032327c7",
+  "unchanged_symbols": [
+    "MultiHeadedAttention",
+    "PositionwiseFeedForward",
+    "attention",
+    "clones"
+  ]
+}

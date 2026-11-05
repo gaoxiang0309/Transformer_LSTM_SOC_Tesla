@@ -1,0 +1,5 @@
+# 完整环境依赖；已有环境可分别用于prepare和train，见README。
+numpy>=1.24
+scipy>=1.11
+torch>=2.0
+matplotlib>=3.7
