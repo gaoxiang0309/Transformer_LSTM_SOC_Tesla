@@ -186,7 +186,8 @@ def _rolling_delta(values, window):
 def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, checkpoint_sha=""):
     """冻结Transformer生成q，并拼接物理锚与ΔAh特征，返回Sequence列表。
 
-    列顺序：[V,I,T,Ah, q, anchor, dAh_K, dAh_L]（按开关拼接）。
+    列顺序：[V,I,T, q, anchor, dAh_K, dAh_L]（按开关拼接）。
+    累计Ah只作为保存于Sequence中的内部辅助量，不进入Transformer/LSTM的直接输入。
     每个q[s]独立使用[s-L+1,s]，不一次编码整段后回取历史位置。
     新序列会裁去L-1个无初估的点，offset同步更新。
     """
@@ -210,9 +211,13 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
         # q[0]实际对应原记录的first点，故V/I/T与标签也必须从first裁切。
         base_x = sequence.x[first:]
         x = np.column_stack([base_x, q]).astype("float32")
+        if cfg.use_physics_anchor or cfg.use_delta_ah:
+            if sequence.ah is None:
+                raise ValueError(
+                    f"序列{sequence.name}缺少内部AH辅助量；请重新运行prepare_data.py"
+                )
+            ah_raw = np.asarray(sequence.ah[first:], dtype=np.float64)
         if cfg.use_physics_anchor:
-            # Ah在prepare中按固定范围归一化，这里反算回容量比例。
-            ah_raw = base_x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
             capacity = _capacity_for_sequence(sequence.name, cfg)
             scale = cfg.capacity_ah / capacity
             coulomb = scale * ah_raw
@@ -220,7 +225,6 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
             anchor = (float(q[0]) - float(coulomb[0])) + coulomb
             x = np.column_stack([x, anchor]).astype("float32")
         if cfg.use_delta_ah:
-            ah_raw = base_x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
             d_short = _rolling_delta(ah_raw, cfg.short_window)
             d_long = _rolling_delta(ah_raw, cfg.long_window)
             x = np.column_stack([x, d_short, d_long]).astype("float32")

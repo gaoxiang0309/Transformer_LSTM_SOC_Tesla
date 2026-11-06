@@ -4,7 +4,7 @@
 
 ```text
 长窗[V,I,T] → Transformer Encoder → 初估q[s]
-短窗[V,I,T,q] → LSTM → 当前SOC
+短窗[V,I,T,q,anchor,ΔAh] → LSTM → 当前SOC
 ```
 
 ## 1. 本轮任务边界（对齐《BIT_SOC_数据窗口与状态划分》）
@@ -17,7 +17,7 @@
 | 短停车 | 保留在序列内 |
 | 长驻车 | 超过 `max_parking_seconds=1800 s` 的连续静置段从序列中切掉；短停车保留 |
 | 时间清洗 | 原始文件并非严格 1 Hz：6 个文件存在亚秒级重复突发（共 44,271 行，最大两处为 m448-N 40℃ REORDERED1 和 m1000 40℃ HWGRADE1）。按 `Time` 重采样到约 1 Hz，并在时间差 >60 s 的缺口处切开序列 |
-| 输入特征 | **V、I、T、Ah** 四维。第 4 维是安时积分 `Ah = ∫I dt / 4.5 Ah`，每段从 0 开始，只用电流、不读取真实 SOC |
+| 输入特征 | **V、I、T** 三维。累计 Ah 不作为网络直接输入；它只保存为内部辅助量，用于物理锚和 ΔAh |
 | 物理锚（A） | 第二阶段输出 `SOC = Q0 + a(T)·Ah + residual`。`Q0` 由段首 q 反推，`a(T)=4.5/C(T)`，C(T) 由 m80 训练集按温度拟合；LSTM 只学锚之外的残差 |
 | 短窗 ΔAh（C） | LSTM 额外输入最近 60 s 与 300 s 的 ΔAh，直接看到近期充放电吞吐，缓解锯齿段平滑 |
 | 窗口 | **按物理秒定义**：长窗 300 s、短窗 60 s。Tesla 为 1 Hz，即 300 点/60 点；冷启动前 `L+K-2=358` 点无输出。上一版基线为 120 s/30 s |
@@ -36,7 +36,7 @@
 | validation | m448-N | 60 | 1,362,581 | 14.7% | 25.0% | 60.3% |
 | test | m1000 | 60 | 1,072,901 | 9.1% | 23.9% | 67.0% |
 
-- 输入：`Voltage`、`Current`、`Battery_Temp_degC`，以及由电流积分得到的安时积分 `Ah`，顺序 **V, I, T, Ah**，1 Hz。
+- 输入：`Voltage`、`Current`、`Battery_Temp_degC`，顺序 **V, I, T**，1 Hz。每条 NPZ 另保存内部 `AH` 数组，仅供物理锚和 ΔAh 计算。
 - 标签：作者按容量插值得到的 SOC 小数（0～1）。
 - 归一化：V/I/T 只在 m80 训练集拟合 `robust_minmax`（p0.01–p99.99 截断后 min-max）；Ah 用固定物理范围 `[-1.2, 0.2]`（额定容量比例），避免测试段深放电被截断：
 
@@ -45,15 +45,14 @@
 | V | 2.800 V | 4.201 V | 0.02% | 0.03% | 0.03% |
 | I | −9.227 A | 7.542 A | 0.02% | 0.11% | 0.60% |
 | T | −20.18 ℃ | 44.61 ℃ | 0.02% | 0.05% | 0.12% |
-| Ah | −1.2 | 0.2 | 0.00% | 0.00% | 0.00% |
 
-> 说明：行车数据的电流尾部比“含充电”数据窄；若用 p0.1，m1000 约 3% 的高电流样本会被截断，因此改用 p0.01（测试饱和约 0.6%），仍能剔除极端离群点。Ah 通道不再按训练分位数拟合，避免测试段深放电被截断。
+> 说明：行车数据的电流尾部比“含充电”数据窄；若用 p0.1，m1000 约 3% 的高电流样本会被截断，因此改用 p0.01（测试饱和约 0.6%）。累计 Ah 不参与输入归一化；原始辅助 Ah 以 `AH` 数组随序列保存。
 
 ## 3. 网络与训练
 
-- Transformer：输入 4 维 `[V,I,T,Ah]`；`d_model=16`、2 头（每头 8 维）、3 层、`d_ff=128`、dropout 0.15、Post-LN、正弦位置编码，读取窗口末端，约 16,273 参数（基线为 `d_model=6`、2 层、`d_ff=64`、2,091 参数）。
-- LSTM：输入 8 维 `[V,I,T,Ah,q,anchor,ΔAh_60,ΔAh_300]`，隐藏 64、1 层，末端接 FC 64→32→1，输出锚之外的残差，约 25,217 参数。
-- 物理锚：`anchor[t] = (q[0] - a(T)·Ah[0]) + a(T)·Ah[t]`，`a(T)=4.5/C(T)`；C(T) 由 m80 训练集按温度拟合（−20℃ 4.209、−10℃ 4.241、0℃ 4.284、10℃ 4.361、25℃ 4.479、40℃ 4.583 Ah）。q[0] 的初值偏差由残差学习修正。
+- Transformer：输入 3 维 `[V,I,T]`；`d_model=16`、2 头（每头 8 维）、3 层、`d_ff=128`、dropout 0.15、Post-LN、正弦位置编码，读取窗口末端。
+- LSTM：输入 7 维 `[V,I,T,q,anchor,ΔAh_60,ΔAh_300]`，隐藏 64、1 层，末端接 FC 64→32→1，输出锚之外的残差。
+- 物理锚：内部使用保存的 Ah 辅助量计算 `anchor[t] = (q[0] - a(T)·Ah[0]) + a(T)·Ah[t]`；Ah 不作为Transformer/LSTM的直接输入。
 - 两阶段冻结训练；RMSprop、MSE、Transformer batch 1024、LSTM batch 256、Transformer lr 5e-4、LSTM lr 1e-3、最多 400 轮、patience 20、梯度裁剪 1.0。
 - 输出 `linear`，不做 sigmoid 截断；`use_physics_anchor`/`use_delta_ah` 可分别关闭做消融。
 
@@ -69,7 +68,7 @@ Transformer_LSTM_SOC_Tesla/
 ├── plot_results.py           测试曲线与训练 loss 绘图
 ├── model/                    Transformer、LSTM、训练工具
 ├── tools/                    数据加载、实验目录、评估、按状态汇总
-├── data/processed/           已准备的行车 NPZ 与 manifest
+├── data/processed_no_ah_delta/ 已准备的 V/I/T + AH辅助量 NPZ 与 manifest
 ├── docs/                     数据窗口、复现假设、代码复用与运行记录
 ├── tests/test_pipeline.py    时间对齐、因果性等检查
 └── run/train/exp*/           训练产物（当前为空，服务器训练后生成）
@@ -80,13 +79,13 @@ Transformer_LSTM_SOC_Tesla/
 - 训练/测试：PyTorch（`torch>=2.0`）；数据准备另需 SciPy，绘图需 matplotlib。
 - 服务器上可使用现成的 conda 环境（例如 `Transformer_LSTM_SOC`）。
 
-## 6. 数据准备（本机已执行，仓库内已带 `data/processed`）
+## 6. 数据准备（本机已执行，当前配置使用 `data/processed_no_ah_delta`）
 
 ```bash
 python prepare_data.py --config configs/tesla_start.json
 ```
 
-只有需要重新切分/改窗口/改归一化百分位时才需要重跑；已有 manifest 会拒绝覆盖，需先移走 `data/processed` 或用 `--output`。
+只有需要重新切分/改窗口/改归一化百分位时才需要重跑；已有 manifest 会拒绝覆盖，需改用新的 `--output`。
 
 ## 7. 小规模检查
 
@@ -128,7 +127,7 @@ python tools/summarize_predictions.py --test-dir <RUN_DIR>/test
 3. **跨电芯泛化**：m80→m448-N/m1000 严格不共享文件，但三颗电芯来自同一台架、同一套测试流程与同一 SOC 计算方式，不等于独立车辆/批次验证。
 4. **公开循环有限**：UDDS/HWFET/LA92/US06 属于官方盲测集，本包只有 REORDERED/HWCUST/HWGRADE，不能与论文 US06/FUDS 数字直接对照。
 5. **第二阶段 q 为样本内预测**：训练集 q 由冻结 Transformer 在同一训练集上生成，未做折外预测。
-6. **安时积分与物理锚**：Ah 只由电流积分得到（不读取真实 SOC），但会显著降低“按安时计数跟踪 SOC”的难度；物理锚进一步把 `Q0+a(T)·Ah` 作为基线，LSTM 只学残差。若要对照论文的纯 V/I/T 输入，把 `use_ah_feature` 设为 false（锚与ΔAh会自动不可用）并重跑 prepare。
+6. **安时积分与物理锚**：当前累计 Ah 不作为网络直接输入，但仍用于构造物理锚和 ΔAh；如需完全去除库仑计数路径，需要同时关闭 `use_physics_anchor` 和 `use_delta_ah`，并重新准备数据。
 7. **锚的初值**：`Q0` 由段首 q 反推，段首 q 的偏差会以常数形式进入锚；残差负责修正，训练时应关注段首误差。
 8. **未做超参搜索、多种子与更多基线**；所有数字为单次固定配置结果。
 
@@ -144,7 +143,7 @@ conda activate Transformer_LSTM_SOC
 # 1) 可选：检查依赖（matplotlib/ scipy 只在准备与绘图时需要）
 python -c "import torch, numpy; print(torch.__version__, torch.cuda.is_available())"
 
-# 2) 可选：重新准备数据（仓库已带 data/processed，一般可跳过）
+# 2) 可选：重新准备数据（当前配置使用 data/processed_no_ah_delta，一般可跳过）
 #    若原始数据不在 ../公开数据集/Tesla_Model3_2170/解压数据与工具，
 #    在 config.py 改 source_dir 或追加 --source "<Tesla_解压数据与工具路径>"
 python prepare_data.py --config configs/tesla_start.json

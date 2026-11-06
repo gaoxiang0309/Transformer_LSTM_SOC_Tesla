@@ -220,7 +220,7 @@ class TransformerSOC(nn.Module):
     def __init__(self, cfg):
         """创建连续输入投影、位置编码、Encoder和标量回归头，并初始化权重。"""
         super().__init__()
-        # F=3为[V,I,T]，F=4为[V,I,T,Ah]；由config.input_features决定。
+        # 当前配置F=3为[V,I,T]；保留F=4兼容旧实验快照。
         self.input_features = cfg.input_features
         self.input_projection = nn.Linear(cfg.input_features, cfg.d_model)
         self.position = PositionalEncoding(cfg.d_model, cfg.dropout, cfg.long_window)
@@ -243,7 +243,7 @@ class TransformerSOC(nn.Module):
         """编码只截止当前时刻的长窗口，读取窗口末端表示回归当前SOC。"""
         if x.ndim != 3 or x.shape[-1] != self.input_features:
             raise ValueError(f"Transformer输入必须为[B,L,{self.input_features}]")
-        # [B,L,F] -> [B,L,D]：连续V/I/T(/Ah)先映射到模型宽度。
+        # [B,L,F] -> [B,L,D]：连续输入先映射到模型宽度。
         projected = self.input_projection(x)
         positioned = self.position(projected)
         hidden = self.encoder(positioned)

@@ -26,10 +26,11 @@ class PipelineTests(unittest.TestCase):
         self.cfg = Config().smoke_config()
 
     def sequence(self, n=40, value=0):
-        """构造N行输入（3或4维）与递增SOC标签，方便核对窗口位置。"""
+        """构造N行V/I/T输入、内部Ah辅助量与递增SOC标签。"""
         x = np.full((n, self.cfg.input_features), value, dtype="float32")
         y = np.arange(n, dtype="float32") / n
-        return Sequence("example", x, y)
+        ah = np.arange(n, dtype="float32") * 0.001
+        return Sequence("example", x, y, ah=ah)
 
     def test_windows_never_cross_sequences(self):
         """检查两个不同数值的序列不会被同一个窗口混合，且标签对应末端。"""
@@ -54,10 +55,13 @@ class PipelineTests(unittest.TestCase):
         sequence = self.sequence()
         fused = make_fused_sequences(Dummy(), [sequence], self.cfg, torch.device("cpu"))[0]
         ds = WindowDataset([fused], self.cfg.short_window)
+        self.assertEqual(self.cfg.input_features, 3)
+        self.assertEqual(self.cfg.lstm_input_features, 7)
+        self.assertEqual(fused.x.shape[1], 7)
         self.assertEqual(len(ds), 40 - 16 - 4 + 2)
         self.assertEqual(fused.offset + ds[0][3], 16 + 4 - 2)
         self.assertTrue(np.all(fused.x[:, self.cfg.input_features] == 0.125))
-        changed = Sequence(sequence.name, sequence.x, sequence.y + 100)
+        changed = Sequence(sequence.name, sequence.x, sequence.y + 100, ah=sequence.ah)
         other = make_fused_sequences(Dummy(), [changed], self.cfg, torch.device("cpu"))[0]
         np.testing.assert_array_equal(fused.x, other.x)
 
@@ -69,7 +73,10 @@ class PipelineTests(unittest.TestCase):
         altered = sequence.x.copy()
         altered[25:] = 100
         changed = make_fused_sequences(
-            model, [Sequence("changed", altered, sequence.y)], self.cfg, torch.device("cpu")
+            model,
+            [Sequence("changed", altered, sequence.y, ah=sequence.ah)],
+            self.cfg,
+            torch.device("cpu"),
         )[0]
         # q追加在输入特征之后，索引为cfg.input_features。
         np.testing.assert_array_equal(

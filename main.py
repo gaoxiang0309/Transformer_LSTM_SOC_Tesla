@@ -114,7 +114,7 @@ def run(args):
     else:
         restore(transformer, run_dir / "weights" / "transformer_best.pt", device)
     if args.stage in ("all", "lstm"):
-        # 第五步：固定最佳Transformer生成q，再训练短窗LSTM（输入V/I/T/Ah/q）。
+        # 第五步：固定最佳Transformer生成q，再训练短窗LSTM（输入V/I/T/q/anchor/ΔAh）。
         # t_sha用于记录q由哪个权重生成，测试时检查两阶段权重是否配套。
         t_sha = sha256(run_dir / "weights" / "transformer_best.pt")
         fused_train = make_fused_sequences(

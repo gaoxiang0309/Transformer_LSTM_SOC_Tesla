@@ -1,6 +1,6 @@
 """第二阶段模型：用短窗口估计当前SOC（物理锚 + 残差）。
 
-输入[B,K,F]的列依次为V、I、T、Ah、q，以及物理锚anchor和短/长窗ΔAh（按配置拼接）。
+输入[B,K,F]的列依次为V、I、T、q，以及物理锚anchor和短/长窗ΔAh（按配置拼接）。
 若启用物理锚，输出 = anchor[t] + 残差；否则输出 = 残差（即直接回归SOC）。
 真实SOC仅用于计算监督损失；每个窗口独立初始化隐藏状态。
 """
@@ -9,7 +9,7 @@ from torch import nn
 
 
 class LSTMSOC(nn.Module):
-    """用[V,I,T,Ah,q,anchor,dAh]短窗口预测SOC（锚+残差）的第二阶段模型。"""
+    """用[V,I,T,q,anchor,dAh]短窗口预测SOC（锚+残差）的第二阶段模型。"""
 
     def __init__(self, cfg):
         """建立单向LSTM和两层隐藏FC，再接一个标量残差输出层。"""

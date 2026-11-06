@@ -21,13 +21,14 @@ def sha256(path):
 
 @dataclass
 class Sequence:
-    # x为[N,3]或[N,4]，y为[N]；offset是本段第一点在源文件中的行号。
-    """保存一段输入、标签及来源信息；x/y长度相同，offset表示源行号偏移。"""
+    # x为[N,3]或[N,4]，y为[N]；ah为可选的内部安时辅助量，不是模型输入。
+    """保存一段输入、标签、内部Ah辅助量及来源信息。"""
     name: str
     x: np.ndarray
     y: np.ndarray
     offset: int = 0
     source: str = ""
+    ah: np.ndarray = None
 
 
 def load_sequences(cfg, split):
@@ -49,10 +50,25 @@ def load_sequences(cfg, split):
             # copy后数组不再依赖已关闭的NPZ文件句柄。
             x = d["X"].copy()
             y = d["Y"].copy()
+            ah = d["AH"].copy() if "AH" in d.files else None
+        if x.ndim != 2 or x.shape[1] != cfg.input_features:
+            raise ValueError(
+                f"{path}输入维度为{x.shape}，与当前配置input_features={cfg.input_features}不匹配；请重新准备数据"
+            )
+        if ah is not None and len(ah) != len(y):
+            raise ValueError(f"{path}的AH辅助量长度与标签不一致")
+        if (cfg.use_physics_anchor or cfg.use_delta_ah) and ah is None:
+            raise ValueError(
+                f"{path}缺少内部AH辅助量；请使用当前prepare_data.py重新准备数据"
+            )
         if cfg.smoke:
             x = x[: cfg.smoke_points]
             y = y[: cfg.smoke_points]
-        sequences.append(Sequence(record["case"], x, y, record["start"], record["source"]))
+            if ah is not None:
+                ah = ah[: cfg.smoke_points]
+        sequences.append(
+            Sequence(record["case"], x, y, record["start"], record["source"], ah)
+        )
     return sequences
 
 

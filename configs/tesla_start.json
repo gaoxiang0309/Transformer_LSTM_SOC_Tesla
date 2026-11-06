@@ -1,5 +1,6 @@
 {
   "output_activation": "linear",
+  "processed_dir": "data/processed_no_ah_delta",
   "normalization": "robust_minmax",
   "clip_percentile": 0.01,
   "train_cells": ["m80"],
@@ -8,7 +9,7 @@
   "include_charges": false,
   "max_parking_seconds": 1800.0,
   "max_gap_seconds": 60.0,
-  "use_ah_feature": true,
+  "use_ah_feature": false,
   "capacity_ah": 4.5,
   "capacity_by_temperature": {
     "-20C": 4.209,

@@ -20,7 +20,7 @@ class Config:
     source_dir: str = str(
         ROOT.parent / "公开数据集" / "Tesla_Model3_2170" / "解压数据与工具"
     )
-    processed_dir: str = str(ROOT / "data" / "processed")
+    processed_dir: str = str(ROOT / "data" / "processed_no_ah_delta")
     run_dir: str = str(ROOT / "run" / "train")
     seed: int = 42
     device: str = "auto"
@@ -39,9 +39,9 @@ class Config:
     # 原始文件并非严格1 Hz（个别文件有亚秒级重复突发）；按Time重采样到约1 Hz，
     # 相邻保留点时间差超过该秒数时切开，不跨缺口构窗（0表示不切）。
     max_gap_seconds: float = 60.0
-    # 安时积分特征：把 ∫I dt / 额定容量 作为第4个输入通道，输入变为 [V, I, T, Ah]。
-    # 该特征只由电流积分得到，不读取真实SOC；每条序列从0开始积分。
-    use_ah_feature: bool = True
+    # 不把累计Ah作为Transformer/LSTM的直接输入；Ah仍在数据准备阶段保存为
+    # 辅助物理量，用于构造物理锚和ΔAh窗口特征。
+    use_ah_feature: bool = False
     capacity_ah: float = 4.5  # Tesla 2170 额定容量
     input_features: int = 4  # 由 use_ah_feature 在 validate() 中确定（3或4）
     # 温度相关容量表（由m80训练集按 SOC~Ah 斜率拟合），用于把Ah换算到SOC单位。
@@ -142,9 +142,8 @@ class Config:
             raise ValueError("ah_norm_high必须大于ah_norm_low")
         if any(value <= 0 for value in self.capacity_by_temperature.values()):
             raise ValueError("capacity_by_temperature中的容量必须为正")
-        if (self.use_physics_anchor or self.use_delta_ah) and not self.use_ah_feature:
-            raise ValueError("物理锚和ΔAh特征要求use_ah_feature=True")
-        # 输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
+        # 物理锚和ΔAh使用保存的辅助Ah，不把累计Ah作为网络输入。
+        # 输入特征数由是否启用直接Ah通道决定：3=[V,I,T]，4=[V,I,T,Ah]。
         self.input_features = 4 if self.use_ah_feature else 3
         # LSTM列顺序：[输入特征..., q, anchor, dAh_K, dAh_L]，按开关拼列。
         self.lstm_input_features = (

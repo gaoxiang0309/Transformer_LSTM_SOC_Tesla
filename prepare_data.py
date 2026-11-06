@@ -6,8 +6,9 @@
 - 行车内部的正负电流、回馈、短停车全部保留，不按电流符号切子状态；
 - 超过 max_parking_seconds 的长驻车静置段从序列中切掉，避免把“长停车”当成行车历史。
 训练/验证/测试按电芯划分（默认 m80 / m448-N / m1000），三个集合不共享文件。
-输入为 V、I、T（Voltage/Current/Battery_Temp_degC），并可拼接第4维安时积分
-Ah = ∫I dt / 额定容量（由 config.use_ah_feature 控制，每段从0开始）。
+输入为 V、I、T（Voltage/Current/Battery_Temp_degC）。安时积分仍按真实时间计算，
+但仅作为内部辅助量保存，用于物理锚和ΔAh，不作为Transformer的直接输入；
+只有 config.use_ah_feature=True 时才会把累计Ah追加为输入通道。
 SOC 为作者按容量插值得到的0～1参考值。
 窗口按物理秒定义，点数由采样间隔换算（Tesla为1 Hz）。
 归一化只在训练划分上拟合：每通道 p0.01–p99.99 截断后 min-max 到[0,1]（可改为 z-score）。
@@ -24,7 +25,7 @@ from config import Config, load_config
 TEMPERATURES = ("-20C", "-10C", "0C", "10C", "25C", "40C")
 # 原始文件中的特征列顺序；写入NPZ时保持这个顺序，模型按V/I/T读取。
 FEATURE_NAMES = ["Voltage", "Current", "Battery_Temp_degC"]
-# 第4维安时积分特征的名称（由电流积分得到，不在原始MAT列中）。
+# 安时积分辅助量的名称（由电流积分得到，不在原始MAT列中）。
 AH_FEATURE_NAME = "Ah_integral"
 # 判定“静置/驻车”的电流阈值（安培）。只用于切长驻车，不用于状态分类。
 PARKING_CURRENT_A = 0.05
@@ -123,7 +124,7 @@ def fit_normalizer(x_train, cfg):
     low = np.percentile(x_train, cfg.clip_percentile, axis=0)
     high = np.percentile(x_train, 100.0 - cfg.clip_percentile, axis=0)
     if cfg.use_ah_feature:
-        # 安时积分用固定物理尺度（额定容量比例），避免测试段深放电/回馈被训练分位数截断。
+        # 只有直接输入Ah时才使用固定物理尺度；辅助Ah不进入归一化输入。
         low[-1] = cfg.ah_norm_low
         high[-1] = cfg.ah_norm_high
     mean = x_train.mean(axis=0)
@@ -230,17 +231,22 @@ def load_segments(entry, cfg):
             segment_x = gap_x[start:stop]
             segment_y = gap_y[start:stop]
             segment_time = gap_time[start:stop]
-            if cfg.use_ah_feature:
+            # 物理锚/ΔAh仍需要累计Ah，但它不再进入模型的直接输入矩阵。
+            need_ah = cfg.use_ah_feature or cfg.use_physics_anchor or cfg.use_delta_ah
+            ah = None
+            if need_ah:
                 # 安时积分：∫I dt / 额定容量；用真实时间差，序列起点为0。
                 # 电流符号沿用Tesla（正=充电、负=放电），不读取真实SOC。
                 dt = np.diff(segment_time)
                 steps = segment_x[:-1, 1] * dt / 3600.0 / cfg.capacity_ah
                 ah = np.concatenate(([0.0], np.cumsum(steps)))
-                segment_x = np.column_stack([segment_x, ah])
+                if cfg.use_ah_feature:
+                    segment_x = np.column_stack([segment_x, ah])
             parts.append(
                 dict(
                     x=segment_x,
                     y=segment_y,
+                    ah=ah,
                     start=int(gap_index[start]),
                     label=label,
                     part=len(parts) + 1,
@@ -330,7 +336,10 @@ def prepare(cfg, output=None):
             name = f"{base}_{index:02d}"
         path = out / split / f"{name}.npz"
         path.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(path, X=x_scaled.astype("float32"), Y=y.astype("float32"))
+        arrays = {"X": x_scaled.astype("float32"), "Y": y.astype("float32")}
+        if part.get("ah") is not None:
+            arrays["AH"] = np.asarray(part["ah"], dtype="float32")
+        np.savez_compressed(path, **arrays)
         records.append(
             dict(
                 split=split,
@@ -383,7 +392,7 @@ def prepare(cfg, output=None):
             ],
         )
     manifest = dict(
-        schema_version=2,
+        schema_version=3,
         dataset="Tesla_Model3_2170",
         task="driving_soc",
         state_filter="driving_only" if not cfg.include_charges else "mixed",
@@ -392,6 +401,9 @@ def prepare(cfg, output=None):
         feature_order="V,I,T,Ah" if cfg.use_ah_feature else "V,I,T",
         ah_feature=dict(
             used=cfg.use_ah_feature,
+            stored_as_auxiliary=bool(cfg.use_physics_anchor or cfg.use_delta_ah),
+            used_for_physics_anchor=cfg.use_physics_anchor,
+            used_for_delta_ah=cfg.use_delta_ah,
             capacity_ah=cfg.capacity_ah,
             norm_low=cfg.ah_norm_low,
             norm_high=cfg.ah_norm_high,
