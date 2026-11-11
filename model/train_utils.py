@@ -186,20 +186,48 @@ def _rolling_delta(values, window):
     return out
 
 
-def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, checkpoint_sha=""):
+def _perturb_ah(x, cfg, rng):
+    """给输入第3列(Ah)注入 step/ramp 偏置并重归一化；V/I/T 与标签不变。
+
+    step：在 [0.3n, 0.7n] 随机时刻加 ±perturb_amp 的固定偏移；
+    ramp：加恒定电流偏置 b∈[-perturb_amp, perturb_amp](A)，Ah 误差 = b·t/3600/C 线性增长。
+    """
+    x = np.array(x, dtype=np.float64)
+    ah = x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
+    n = len(ah)
+    if cfg.perturb_mode == "step":
+        lo = max(1, int(0.3 * n))
+        hi = max(lo + 1, int(0.7 * n))
+        t0 = int(rng.integers(lo, hi))
+        delta = float(rng.choice(np.array([-1.0, 1.0]))) * cfg.perturb_amp
+        ah[t0:] += delta
+    else:  # ramp
+        b = float(rng.uniform(-cfg.perturb_amp, cfg.perturb_amp))
+        ah += b * np.arange(n, dtype=np.float64) / 3600.0 / cfg.capacity_ah
+    x[:, 3] = (ah - cfg.ah_norm_low) / (cfg.ah_norm_high - cfg.ah_norm_low)
+    return x.astype(np.float32)
+
+
+def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, checkpoint_sha="", perturb=False):
     """冻结Transformer生成q，并拼接物理锚与ΔAh特征，返回Sequence列表。
 
     列顺序：[V,I,T,Ah, q, anchor, dAh_K, dAh_L]（按开关拼接）。
     每个q[s]独立使用[s-L+1,s]，不一次编码整段后回取历史位置。
     新序列会裁去L-1个无初估的点，offset同步更新。
+    perturb=True 时对训练集给Ah注入偏置（方案一），label保持干净，供扰动训练。
     """
     transformer.to(device).eval()
     # eval关闭dropout；requires_grad_(False)冻结参数，两者作用不同。
     transformer.requires_grad_(False)
+    rng = np.random.default_rng(cfg.perturb_seed or cfg.seed)
     result = []
     skipped = []
     for sequence in sequences:
-        dataset = WindowDataset([sequence], cfg.long_window)
+        x_arr = sequence.x
+        if perturb and cfg.use_ah_feature:
+            x_arr = _perturb_ah(sequence.x, cfg, rng)
+        seq = Sequence(sequence.name, x_arr, sequence.y, sequence.offset, sequence.source)
+        dataset = WindowDataset([seq], cfg.long_window)
         if len(dataset) == 0:
             skipped.append(sequence.name)
             continue
@@ -211,7 +239,7 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
         q = np.concatenate(predictions).astype("float32")
         first = cfg.long_window - 1
         # q[0]实际对应原记录的first点，故V/I/T与标签也必须从first裁切。
-        base_x = sequence.x[first:]
+        base_x = seq.x[first:]
         x = np.column_stack([base_x, q]).astype("float32")
         if cfg.use_physics_anchor:
             # Ah在prepare中按固定范围归一化，这里反算回容量比例。

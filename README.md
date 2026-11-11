@@ -3,8 +3,8 @@
 本项目沿用论文《Collaborative framework of Transformer and LSTM for enhanced state-of-charge estimation》的两阶段特征融合结构，数据使用 McMaster University 公开的 **Tesla Model 3 2170**，本轮**只做行车状态 SOC**。这是方法适配，不是论文 CALCE A123 实验数字的复刻。
 
 ```text
-长窗[V,I,T] → Transformer Encoder → 初估q[s]
-短窗[V,I,T,q] → LSTM → 当前SOC
+长窗[V,I,T,Ah] → Transformer Encoder → 初估q[s]
+短窗[V,I,T,Ah,q,anchor,ΔAh_60,ΔAh_300] → LSTM → w·anchor + 残差 → 当前SOC
 ```
 
 ## 1. 本轮任务边界（对齐《BIT_SOC_数据窗口与状态划分》）
@@ -20,6 +20,7 @@
 | 输入特征 | **V、I、T、Ah** 四维。第 4 维是安时积分 `Ah = ∫I dt / 4.5 Ah`，每段从 0 开始，只用电流、不读取真实 SOC |
 | 物理锚（A） | 第二阶段输出 `SOC = w·anchor + residual`。`anchor = Q0 + a(T)·Ah`，`Q0` 由段首 q 反推，`a(T)=4.5/C(T)`；`w` 是**可学习门控**（`anchor_mode=gated`，初始化≈1），让网络在锚与电压冲突时自动降权 |
 | 短窗 ΔAh（C） | LSTM 额外输入最近 60 s 与 300 s 的 ΔAh，直接看到近期充放电吞吐，缓解锯齿段平滑 |
+| 扰动训练（方案一） | 训练集融合时给累计 Ah 注入 `step`/`ramp` 偏置（`perturb_train`，幅值 `perturb_amp`），标签保持作者 SOC 不变；验证/测试不注入。让模型学会用 V/I/T 纠正被污染的 Ah |
 | 窗口 | **按物理秒定义**：长窗 300 s、短窗 60 s。Tesla 为 1 Hz，即 300 点/60 点；冷启动前 `L+K-2=358` 点无输出。上一版基线为 120 s/30 s |
 | 窗口是否冻结 | 否。`long_window_seconds / short_window_seconds` 是配置项，等小会确认后再改 |
 
@@ -57,6 +58,7 @@
 - 锚的使用方式 `anchor_mode`：`hard`（`SOC=anchor+残差`，旧版）、`soft`（`SOC=残差`）、`gated`（`SOC=w·anchor+残差`，w 由 `sigmoid(MLP([hidden, anchor−q]))` 门控、初始化≈1）。默认 **gated**。
 - 两阶段冻结训练；RMSprop、MSE、Transformer batch 1024、LSTM batch 256、Transformer lr 5e-4、LSTM lr 1e-3、最多 400 轮、patience 20、梯度裁剪 1.0。
 - 输出 `linear`，不做 sigmoid 截断；`use_physics_anchor`/`use_delta_ah`/`anchor_mode` 可分别配置做消融。
+- 扰动训练（方案一，与门控软锚配合）：`perturb_train=true` 时训练集注入 Ah 偏置——`perturb_mode=step`（随机时刻加 ±`perturb_amp` 固定偏移）或 `ramp`（恒定电流偏置，Ah 误差线性增长），`perturb_seed` 控制随机源；`init_lstm_from` 可从旧 hard 权重 warm-start（`strict=False`，gate_head 保持 w≈1 初始化）。
 
 ## 4. 文件结构
 
@@ -130,7 +132,7 @@ python tools/summarize_predictions.py --test-dir <RUN_DIR>/test
 4. **公开循环有限**：UDDS/HWFET/LA92/US06 属于官方盲测集，本包只有 REORDERED/HWCUST/HWGRADE，不能与论文 US06/FUDS 数字直接对照。
 5. **第二阶段 q 为样本内预测**：训练集 q 由冻结 Transformer 在同一训练集上生成，未做折外预测。
 6. **安时积分与物理锚**：Ah 只由电流积分得到（不读取真实 SOC），但会显著降低“按安时计数跟踪 SOC”的难度；物理锚把 `Q0+a(T)·Ah` 作为基线，LSTM 学门控与残差。若要对照论文的纯 V/I/T 输入，把 `use_ah_feature` 设为 false（锚与ΔAh会自动不可用）并重跑 prepare。
-7. **锚的初值与门控**：`Q0` 由段首 q 反推，段首 q 的偏差会以常数形式进入锚；`gated` 模式下门控 `w` 可视锚与 q 的差异而降权，但冷端/偏移场景仍靠残差与扰动训练（见 `docs/运行检查记录.md`）。
+7. **锚的初值与门控**：`Q0` 由段首 q 反推，段首 q 的偏差会以常数形式进入锚；`gated` 模式下门控 `w` 可视锚与 q 的差异而降权。当前模型的纠偏能力靠 `perturb_train` 扰动训练（step/ramp）来获得，验收用 P0-2 偏移注入（见 `docs/运行检查记录.md`）。
 8. **未做超参搜索、多种子与更多基线**；所有数字为单次固定配置结果。
 
 论文事实与假设见[复现假设](docs/复现假设.md)，数据与窗口细节见[窗口与数据说明](docs/窗口与数据说明.md)，代码来源见[代码复用说明](docs/代码复用说明.md)，本次运行记录见[运行检查记录](docs/运行检查记录.md)。

@@ -70,6 +70,12 @@ class Config:
     # 第二阶段LSTM的warm-start权重路径（可选；留空则随机初始化）。
     # 从旧的hard锚权重继续训练时用 strict=False 载入，gate_head 保持近恒等初始化。
     init_lstm_from: str = ""
+    # 扰动训练（方案一，与门控软锚配合）：仅在训练集融合时给累计Ah注入偏置，label保持作者SOC，
+    # 让模型学会用V/I/T纠正被污染的Ah；验证/测试不注入（保持干净）。
+    perturb_train: bool = False
+    perturb_mode: str = "step"  # step=固定偏移；ramp=电流恒偏（Ah误差随时间线性增长）
+    perturb_amp: float = 0.02  # step：Ah比例幅值(±amp)；ramp：电流偏置幅值(A,±amp)
+    perturb_seed: int = 0  # 0=用cfg.seed；>0=固定随机源（复现）
     # C：给LSTM增加短窗ΔAh特征（短窗60s与长窗300s的安时变化）。
     use_delta_ah: bool = True
     # LSTM输入维度 = 输入特征 + q + (锚) + (2个ΔAh)，由validate()派生。
@@ -159,6 +165,10 @@ class Config:
             raise ValueError("物理锚和ΔAh特征要求use_ah_feature=True")
         if self.anchor_mode not in ("hard", "soft", "gated"):
             raise ValueError("anchor_mode需要是hard/soft/gated")
+        if self.perturb_mode not in ("step", "ramp"):
+            raise ValueError("perturb_mode需要是step/ramp")
+        if self.perturb_amp <= 0:
+            raise ValueError("perturb_amp必须为正")
         # 输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
         self.input_features = 4 if self.use_ah_feature else 3
         # LSTM列顺序：[输入特征..., q, anchor, dAh_K, dAh_L]，按开关拼列。

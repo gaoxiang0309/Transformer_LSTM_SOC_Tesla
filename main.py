@@ -118,7 +118,8 @@ def run(args):
         # t_sha用于记录q由哪个权重生成，测试时检查两阶段权重是否配套。
         t_sha = sha256(run_dir / "weights" / "transformer_best.pt")
         fused_train = make_fused_sequences(
-            transformer, train, cfg, device, run_dir / "cache" / "train", t_sha
+            transformer, train, cfg, device, run_dir / "cache" / "train", t_sha,
+            perturb=cfg.perturb_train,
         )
         fused_val = make_fused_sequences(
             transformer, val, cfg, device, run_dir / "cache" / "validation", t_sha
