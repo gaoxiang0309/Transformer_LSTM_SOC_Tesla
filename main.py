@@ -99,6 +99,10 @@ def run(args):
     val = load_sequences(cfg, "validation")
     transformer = make_model(cfg).to(device)
     if args.stage in ("all", "transformer"):
+        if cfg.init_transformer_from:
+            # 用预训练权重做初始化（缩短训练），随后仍继续训练/微调。
+            restore(transformer, Path(cfg.init_transformer_from), device)
+            print("预训练初始化 Transformer（继续微调）:", cfg.init_transformer_from, flush=True)
         # 长窗输入[B,L,3]，目标是窗口最后一个时刻的SOC。
         train_dataset = WindowDataset(train, cfg.long_window, cfg.train_stride)
         validation_dataset = WindowDataset(val, cfg.long_window, cfg.eval_stride)

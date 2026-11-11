@@ -66,10 +66,15 @@ class Config:
     # hard  = SOC = anchor + residual（旧版，锚权重恒为1）
     # soft  = SOC = residual（锚只作为输入特征，不再写死进输出）
     # gated = SOC = w·anchor + residual（方案B：可学习门控 w，w 初始化≈1）
-    anchor_mode: str = "gated"
+    # dual  = SOC = α·anchor + (1−α)·q + residual（方案C：双支路混合，
+    #         在“积分侧锚”与“电压侧估计q”之间学混合比例 α，α 初始化≈1）
+    anchor_mode: str = "dual"
     # 第二阶段LSTM的warm-start权重路径（可选；留空则随机初始化）。
     # 从旧的hard锚权重继续训练时用 strict=False 载入，gate_head 保持近恒等初始化。
     init_lstm_from: str = ""
+    # 第一阶段Transformer的预训练初始化路径（可选；留空则随机初始化）。
+    # 各版本共用同一Transformer（T MAE 均1.298），设置后用它做初始权重并继续训练/微调（缩短训练）。
+    init_transformer_from: str = ""
     # 扰动训练（方案一，与门控软锚配合）：仅在训练集融合时给累计Ah注入偏置，label保持作者SOC，
     # 让模型学会用V/I/T纠正被污染的Ah；验证/测试不注入（保持干净）。
     perturb_train: bool = True
@@ -153,6 +158,11 @@ class Config:
             if not warm.is_absolute():
                 warm = (ROOT / warm).resolve()
             self.init_lstm_from = str(warm)
+        if self.init_transformer_from:
+            warm_t = Path(self.init_transformer_from)
+            if not warm_t.is_absolute():
+                warm_t = (ROOT / warm_t).resolve()
+            self.init_transformer_from = str(warm_t)
         if self.sample_interval_s <= 0:
             raise ValueError("sample_interval_s必须为正")
         if self.max_parking_seconds < 0:
@@ -167,8 +177,8 @@ class Config:
             raise ValueError("capacity_by_temperature中的容量必须为正")
         if (self.use_physics_anchor or self.use_delta_ah) and not self.use_ah_feature:
             raise ValueError("物理锚和ΔAh特征要求use_ah_feature=True")
-        if self.anchor_mode not in ("hard", "soft", "gated"):
-            raise ValueError("anchor_mode需要是hard/soft/gated")
+        if self.anchor_mode not in ("hard", "soft", "gated", "dual"):
+            raise ValueError("anchor_mode需要是hard/soft/gated/dual")
         if self.perturb_mode not in ("step", "ramp"):
             raise ValueError("perturb_mode需要是step/ramp")
         if self.perturb_amp <= 0:
