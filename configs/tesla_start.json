@@ -21,6 +21,8 @@
   "ah_norm_low": -1.2,
   "ah_norm_high": 0.2,
   "use_physics_anchor": true,
+  "anchor_mode": "gated",
+  "init_lstm_from": "",
   "use_delta_ah": true,
   "sample_interval_s": 1.0,
   "long_window_seconds": 300.0,

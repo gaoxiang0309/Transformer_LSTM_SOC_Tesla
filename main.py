@@ -124,6 +124,10 @@ def run(args):
             transformer, val, cfg, device, run_dir / "cache" / "validation", t_sha
         )
         lstm = LSTMSOC(cfg)
+        if cfg.init_lstm_from:
+            # 从旧权重warm-start（strict=False忽略缺失的gate_head，保持其近恒等初始化）。
+            print("WARM-START LSTM from:", cfg.init_lstm_from, flush=True)
+            restore(lstm, Path(cfg.init_lstm_from), device, strict=False)
         train_dataset = WindowDataset(fused_train, cfg.short_window, cfg.train_stride)
         validation_dataset = WindowDataset(fused_val, cfg.short_window, cfg.eval_stride)
         train_model(

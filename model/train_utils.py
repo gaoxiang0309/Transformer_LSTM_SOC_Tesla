@@ -90,10 +90,13 @@ def save_checkpoint(path, payload):
     temp.replace(path)
 
 
-def restore(model, path, device):
-    """读取checkpoint，将权重载入模型并设置推理模式，返回checkpoint中的其他信息。"""
+def restore(model, path, device, strict=True):
+    """读取checkpoint，将权重载入模型并设置推理模式，返回checkpoint中的其他信息。
+
+    :param strict: False时允许缺失/多余键，用于从旧结构（如无gate_head的hard锚）warm-start。
+    """
     state = torch.load(path, map_location=device, weights_only=True)
-    model.load_state_dict(state["model"])
+    model.load_state_dict(state["model"], strict=strict)
     model.to(device).eval()
     return state
 

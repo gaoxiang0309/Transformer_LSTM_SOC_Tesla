@@ -62,6 +62,14 @@ class Config:
     # A：物理锚 + 残差输出。anchor = Q0 + scale(T)*Ah，Q0由段首q反推；
     # LSTM只学习 anchor 之外的残差。
     use_physics_anchor: bool = True
+    # 物理锚的使用方式（仅在 use_physics_anchor=True 时生效）：
+    # hard  = SOC = anchor + residual（旧版，锚权重恒为1）
+    # soft  = SOC = residual（锚只作为输入特征，不再写死进输出）
+    # gated = SOC = w·anchor + residual（方案B：可学习门控 w，w 初始化≈1）
+    anchor_mode: str = "gated"
+    # 第二阶段LSTM的warm-start权重路径（可选；留空则随机初始化）。
+    # 从旧的hard锚权重继续训练时用 strict=False 载入，gate_head 保持近恒等初始化。
+    init_lstm_from: str = ""
     # C：给LSTM增加短窗ΔAh特征（短窗60s与长窗300s的安时变化）。
     use_delta_ah: bool = True
     # LSTM输入维度 = 输入特征 + q + (锚) + (2个ΔAh)，由validate()派生。
@@ -130,6 +138,11 @@ class Config:
             else:
                 absolute_path = path.resolve()
             setattr(self, name, str(absolute_path))
+        if self.init_lstm_from:
+            warm = Path(self.init_lstm_from)
+            if not warm.is_absolute():
+                warm = (ROOT / warm).resolve()
+            self.init_lstm_from = str(warm)
         if self.sample_interval_s <= 0:
             raise ValueError("sample_interval_s必须为正")
         if self.max_parking_seconds < 0:
@@ -144,6 +157,8 @@ class Config:
             raise ValueError("capacity_by_temperature中的容量必须为正")
         if (self.use_physics_anchor or self.use_delta_ah) and not self.use_ah_feature:
             raise ValueError("物理锚和ΔAh特征要求use_ah_feature=True")
+        if self.anchor_mode not in ("hard", "soft", "gated"):
+            raise ValueError("anchor_mode需要是hard/soft/gated")
         # 输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
         self.input_features = 4 if self.use_ah_feature else 3
         # LSTM列顺序：[输入特征..., q, anchor, dAh_K, dAh_L]，按开关拼列。
