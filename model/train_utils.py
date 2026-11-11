@@ -190,7 +190,8 @@ def _perturb_ah(x, cfg, rng):
     """给输入第3列(Ah)注入 step/ramp 偏置并重归一化；V/I/T 与标签不变。
 
     step：在 [0.3n, 0.7n] 随机时刻加 ±perturb_amp 的固定偏移；
-    ramp：加恒定电流偏置 b∈[-perturb_amp, perturb_amp](A)，Ah 误差 = b·t/3600/C 线性增长。
+    ramp：电流零偏 b(t)=b0+tc·(T−25℃)，b0∈[-perturb_amp,perturb_amp](A)、
+          tc∈[-perturb_tc,perturb_tc](A/℃)，Ah误差=∫b dt/3600/C（线性+温漂）。
     """
     x = np.array(x, dtype=np.float64)
     ah = x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
@@ -202,8 +203,11 @@ def _perturb_ah(x, cfg, rng):
         delta = float(rng.choice(np.array([-1.0, 1.0]))) * cfg.perturb_amp
         ah[t0:] += delta
     else:  # ramp
-        b = float(rng.uniform(-cfg.perturb_amp, cfg.perturb_amp))
-        ah += b * np.arange(n, dtype=np.float64) / 3600.0 / cfg.capacity_ah
+        b0 = float(rng.uniform(-cfg.perturb_amp, cfg.perturb_amp))
+        tc = float(rng.uniform(-cfg.perturb_tc, cfg.perturb_tc))
+        T = x[:, 2] * (cfg.t_norm_high - cfg.t_norm_low) + cfg.t_norm_low  # 还原℃
+        b = b0 + tc * (T - 25.0)  # 温漂：25℃处零偏=b0
+        ah += np.cumsum(b) / 3600.0 / cfg.capacity_ah  # 1 Hz，dt=1s
     x[:, 3] = (ah - cfg.ah_norm_low) / (cfg.ah_norm_high - cfg.ah_norm_low)
     return x.astype(np.float32)
 

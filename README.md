@@ -20,7 +20,7 @@
 | 输入特征 | **V、I、T、Ah** 四维。第 4 维是安时积分 `Ah = ∫I dt / 4.5 Ah`，每段从 0 开始，只用电流、不读取真实 SOC |
 | 物理锚（A） | 第二阶段输出 `SOC = w·anchor + residual`。`anchor = Q0 + a(T)·Ah`，`Q0` 由段首 q 反推，`a(T)=4.5/C(T)`；`w` 是**可学习门控**（`anchor_mode=gated`，初始化≈1），让网络在锚与电压冲突时自动降权 |
 | 短窗 ΔAh（C） | LSTM 额外输入最近 60 s 与 300 s 的 ΔAh，直接看到近期充放电吞吐，缓解锯齿段平滑 |
-| 扰动训练（方案一） | 训练集融合时给累计 Ah 注入 `step`/`ramp` 偏置（`perturb_train`，幅值 `perturb_amp`），标签保持作者 SOC 不变；验证/测试不注入。让模型学会用 V/I/T 纠正被污染的 Ah |
+| 扰动训练（方案一） | 训练集融合时给累计 Ah 注入电流零偏（默认 `ramp`：`b(t)=b0+tc·(T−25℃)`，`b0=±0.05 A`、`tc=±1 mA/℃` 温漂），标签保持作者 SOC 不变；验证/测试不注入。让模型学会用 V/I/T 纠正被污染的 Ah |
 | 窗口 | **按物理秒定义**：长窗 300 s、短窗 60 s。Tesla 为 1 Hz，即 300 点/60 点；冷启动前 `L+K-2=358` 点无输出。上一版基线为 120 s/30 s |
 | 窗口是否冻结 | 否。`long_window_seconds / short_window_seconds` 是配置项，等小会确认后再改 |
 
@@ -58,7 +58,7 @@
 - 锚的使用方式 `anchor_mode`：`hard`（`SOC=anchor+残差`，旧版）、`soft`（`SOC=残差`）、`gated`（`SOC=w·anchor+残差`，w 由 `sigmoid(MLP([hidden, anchor−q]))` 门控、初始化≈1）。默认 **gated**。
 - 两阶段冻结训练；RMSprop、MSE、Transformer batch 1024、LSTM batch 256、Transformer lr 5e-4、LSTM lr 1e-3、最多 400 轮、patience 20、梯度裁剪 1.0。
 - 输出 `linear`，不做 sigmoid 截断；`use_physics_anchor`/`use_delta_ah`/`anchor_mode` 可分别配置做消融。
-- 扰动训练（方案一，与门控软锚配合）：`perturb_train=true` 时训练集注入 Ah 偏置——`perturb_mode=step`（随机时刻加 ±`perturb_amp` 固定偏移）或 `ramp`（恒定电流偏置，Ah 误差线性增长），`perturb_seed` 控制随机源；`init_lstm_from` 可从旧 hard 权重 warm-start（`strict=False`，gate_head 保持 w≈1 初始化）。
+- 扰动训练（方案一，与门控软锚配合）：默认 `perturb_train=true`、`perturb_mode=ramp`——注入电流零偏 `b(t)=b0+tc·(T−25℃)`，`b0∈±perturb_amp(0.05 A)`、温漂系数 `tc∈±perturb_tc(0.001 A/℃)`，`Ah误差=∫b dt/3600/C`（约 0.6~1.6 pp / 约 2 h 行车）；`perturb_seed` 控制随机源，`t_norm_low/high` 用于把归一化 T 还原成℃。也可切 `step` 做固定 Ah 偏移。`init_lstm_from` 可从旧 hard 权重 warm-start（`strict=False`，gate_head 保持 w≈1 初始化）。
 
 ## 4. 文件结构
 

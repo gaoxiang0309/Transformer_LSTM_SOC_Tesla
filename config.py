@@ -72,10 +72,14 @@ class Config:
     init_lstm_from: str = ""
     # 扰动训练（方案一，与门控软锚配合）：仅在训练集融合时给累计Ah注入偏置，label保持作者SOC，
     # 让模型学会用V/I/T纠正被污染的Ah；验证/测试不注入（保持干净）。
-    perturb_train: bool = False
-    perturb_mode: str = "step"  # step=固定偏移；ramp=电流恒偏（Ah误差随时间线性增长）
-    perturb_amp: float = 0.02  # step：Ah比例幅值(±amp)；ramp：电流偏置幅值(A,±amp)
+    perturb_train: bool = True
+    perturb_mode: str = "ramp"  # ramp=电流零偏(带温漂)；step=固定Ah偏移
+    perturb_amp: float = 0.05  # ramp：基础电流零偏幅值(A, ±)；step：Ah比例幅值(±)
+    perturb_tc: float = 0.001  # ramp：温漂系数(A/℃)，b(t)=b0+tc·(T−25℃)
     perturb_seed: int = 0  # 0=用cfg.seed；>0=固定随机源（复现）
+    # T通道归一化范围（robust_minmax，与data/processed一致），用于把归一化T还原成℃算温漂。
+    t_norm_low: float = -20.178
+    t_norm_high: float = 44.607
     # C：给LSTM增加短窗ΔAh特征（短窗60s与长窗300s的安时变化）。
     use_delta_ah: bool = True
     # LSTM输入维度 = 输入特征 + q + (锚) + (2个ΔAh)，由validate()派生。
@@ -169,6 +173,10 @@ class Config:
             raise ValueError("perturb_mode需要是step/ramp")
         if self.perturb_amp <= 0:
             raise ValueError("perturb_amp必须为正")
+        if self.perturb_tc < 0:
+            raise ValueError("perturb_tc不能为负")
+        if self.t_norm_high <= self.t_norm_low:
+            raise ValueError("t_norm_high必须大于t_norm_low")
         # 输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
         self.input_features = 4 if self.use_ah_feature else 3
         # LSTM列顺序：[输入特征..., q, anchor, dAh_K, dAh_L]，按开关拼列。
