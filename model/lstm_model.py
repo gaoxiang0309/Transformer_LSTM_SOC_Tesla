@@ -69,7 +69,7 @@ class LSTMSOC(nn.Module):
                 prediction = residual
             else:  # gated 或 dual
                 q = x[:, -1, self.q_index]  # [B]，电压侧估计 anchor_v
-                mismatch = (anchor - q).unsqueeze(-1)  # [B,1]，两路差异
+                mismatch = (anchor - q).abs().unsqueeze(-1)  # [B,1]，两路差异的绝对值（门控对正负偏离对称）
                 gate_in = torch.cat([last_hidden, mismatch], dim=-1)  # [B,H+1]
                 weight = torch.sigmoid(self.gate_head(gate_in)).squeeze(-1)  # [B]，0~1
                 if self.anchor_mode == "gated":
