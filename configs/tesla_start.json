@@ -29,6 +29,7 @@
   "perturb_amp": 0.05,
   "perturb_tc": 0.001,
   "perturb_seed": 0,
+  "perturb_prob": 0.5,
   "t_norm_low": -20.178,
   "t_norm_high": 44.607,
   "use_delta_ah": true,

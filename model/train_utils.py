@@ -228,7 +228,7 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
     skipped = []
     for sequence in sequences:
         x_arr = sequence.x
-        if perturb and cfg.use_ah_feature:
+        if perturb and cfg.use_ah_feature and rng.random() < cfg.perturb_prob:
             x_arr = _perturb_ah(sequence.x, cfg, rng)
         seq = Sequence(sequence.name, x_arr, sequence.y, sequence.offset, sequence.source)
         dataset = WindowDataset([seq], cfg.long_window)

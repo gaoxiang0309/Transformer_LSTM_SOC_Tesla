@@ -82,6 +82,7 @@ class Config:
     perturb_amp: float = 0.05  # ramp：基础电流零偏幅值(A, ±)；step：Ah比例幅值(±)
     perturb_tc: float = 0.001  # ramp：温漂系数(A/℃)，b(t)=b0+tc·(T−25℃)
     perturb_seed: int = 0  # 0=用cfg.seed；>0=固定随机源（复现）
+    perturb_prob: float = 0.5  # 注入扰动的序列占比；其余保持干净（保干净精度）
     # T通道归一化范围（robust_minmax，与data/processed一致），用于把归一化T还原成℃算温漂。
     t_norm_low: float = -20.178
     t_norm_high: float = 44.607
@@ -185,6 +186,8 @@ class Config:
             raise ValueError("perturb_amp必须为正")
         if self.perturb_tc < 0:
             raise ValueError("perturb_tc不能为负")
+        if not (0 < self.perturb_prob <= 1):
+            raise ValueError("perturb_prob需要位于(0,1]")
         if self.t_norm_high <= self.t_norm_low:
             raise ValueError("t_norm_high必须大于t_norm_low")
         # 输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
