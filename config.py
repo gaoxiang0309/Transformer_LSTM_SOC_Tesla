@@ -80,6 +80,8 @@ class Config:
     # 第一阶段Transformer的预训练初始化路径（可选；留空则随机初始化）。
     # 各版本共用同一Transformer（T MAE 均1.298），设置后用它做初始权重并继续训练/微调（缩短训练）。
     init_transformer_from: str = ""
+    # 是否训练第一阶段Transformer。实验三复用已有q_Ah权重时设为false。
+    train_transformer: bool = True
     # 扰动训练（方案一，与门控软锚配合）：仅在训练集融合时给累计Ah注入偏置，label保持作者SOC，
     # 让模型学会用V/I/T纠正被污染的Ah；验证/测试不注入（保持干净）。
     perturb_train: bool = True
@@ -93,7 +95,12 @@ class Config:
     t_norm_high: float = 44.607
     # C：给LSTM增加短窗ΔAh特征（短窗60s与长窗300s的安时变化）。
     use_delta_ah: bool = True
-    # LSTM输入维度 = 输入特征 + q + (锚) + (2个ΔAh)，由validate()派生。
+    # 实验三的局部历史统计，按当前及过去history_window_seconds计算。
+    # 四列依次为V_mean、I_mean、V_dev、I_dev，追加在现有融合列末端。
+    use_history_stats: bool = False
+    history_window_seconds: float = 60.0
+    history_window: int = 60
+    # LSTM输入维度 = 输入特征 + q + (锚) + (2个ΔAh) + (4个历史统计)，由validate()派生。
     lstm_input_features: int = 0
     # 归一化只在训练划分上拟合。
     # robust_minmax：每通道p0.01–p99.99截断后min-max到[0,1]；
@@ -197,6 +204,8 @@ class Config:
             raise ValueError("perturb_prob需要位于(0,1]")
         if self.t_norm_high <= self.t_norm_low:
             raise ValueError("t_norm_high必须大于t_norm_low")
+        if self.history_window_seconds <= 0:
+            raise ValueError("history_window_seconds必须为正")
         # LSTM基础输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
         self.input_features = 4 if self.use_ah_feature else 3
         # Transformer可以单独少读Ah，但不能读取基础输入之外的列。
@@ -212,10 +221,14 @@ class Config:
             + 1
             + (1 if self.use_physics_anchor else 0)
             + (2 if self.use_delta_ah else 0)
+            + (4 if self.use_history_stats else 0)
         )
         # 窗口按秒定义：点数 = 秒数 / 采样间隔，四舍五入到整数点。
         self.long_window = max(1, int(round(self.long_window_seconds / self.sample_interval_s)))
         self.short_window = max(1, int(round(self.short_window_seconds / self.sample_interval_s)))
+        self.history_window = max(
+            1, int(round(self.history_window_seconds / self.sample_interval_s))
+        )
         if not (1 <= self.short_window < self.long_window):
             raise ValueError("需要 1 <= short_window < long_window")
         if self.d_model % self.n_heads or self.norm_order not in ("pre", "post"):

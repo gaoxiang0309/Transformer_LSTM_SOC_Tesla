@@ -7,6 +7,7 @@
 import argparse
 import json
 import platform
+import shutil
 from pathlib import Path
 import numpy as np
 import torch
@@ -76,6 +77,9 @@ def run(args):
             sampling_interval_s=cfg.sample_interval_s,
             base_input_features=cfg.input_features,
             q_input_features=cfg.q_input_features,
+            train_transformer=cfg.train_transformer,
+            use_history_stats=cfg.use_history_stats,
+            history_window_seconds=cfg.history_window_seconds,
             window_seconds=dict(
                 long=cfg.long_window_seconds, short=cfg.short_window_seconds
             ),
@@ -100,7 +104,10 @@ def run(args):
     train = load_sequences(cfg, "train")
     val = load_sequences(cfg, "validation")
     transformer = make_model(cfg).to(device)
-    if args.stage in ("all", "transformer"):
+    should_train_transformer = (
+        args.stage in ("all", "transformer") and cfg.train_transformer
+    )
+    if should_train_transformer:
         if cfg.init_transformer_from:
             # 用预训练权重做初始化（缩短训练），随后仍继续训练/微调。
             restore(transformer, Path(cfg.init_transformer_from), device)
@@ -123,7 +130,19 @@ def run(args):
             device,
         )
     else:
-        restore(transformer, run_dir / "weights" / "transformer_best.pt", device)
+        if args.run:
+            transformer_path = run_dir / "weights" / "transformer_best.pt"
+        else:
+            if not cfg.init_transformer_from:
+                raise ValueError("train_transformer=false时必须提供init_transformer_from")
+            transformer_path = Path(cfg.init_transformer_from)
+        if not transformer_path.exists():
+            raise FileNotFoundError(f"Transformer权重不存在: {transformer_path}")
+        restore(transformer, transformer_path, device)
+        target_path = run_dir / "weights" / "transformer_best.pt"
+        if not args.run and transformer_path.resolve() != target_path.resolve():
+            shutil.copy2(transformer_path, target_path)
+        print("复用Transformer权重并冻结第一阶段:", transformer_path, flush=True)
     if args.stage in ("all", "lstm"):
         # 第五步：固定最佳Transformer生成q，再训练短窗LSTM（输入V/I/T/Ah/q）。
         # t_sha用于记录q由哪个权重生成，测试时检查两阶段权重是否配套。
@@ -137,9 +156,15 @@ def run(args):
         )
         lstm = LSTMSOC(cfg)
         if cfg.init_lstm_from:
-            # 从旧权重warm-start（strict=False忽略缺失的gate_head，保持其近恒等初始化）。
+            # 从旧权重warm-start。新增历史统计列时只扩展LSTM输入投影，旧列权重继续复用。
             print("WARM-START LSTM from:", cfg.init_lstm_from, flush=True)
-            restore(lstm, Path(cfg.init_lstm_from), device, strict=False)
+            restore(
+                lstm,
+                Path(cfg.init_lstm_from),
+                device,
+                strict=False,
+                allow_input_expansion=cfg.use_history_stats,
+            )
         train_dataset = WindowDataset(fused_train, cfg.short_window, cfg.train_stride)
         validation_dataset = WindowDataset(fused_val, cfg.short_window, cfg.eval_stride)
         train_model(
@@ -157,8 +182,8 @@ def run(args):
     print("训练阶段完成。RUN_DIR =", run_dir, flush=True)
     print("下一步（在同一 Python 环境执行）：", flush=True)
     print(f'  python test.py --run "{run_dir}"', flush=True)
-    print(f'  python plot_results.py --test-dir "{run_dir}/test"', flush=True)
-    print(f'  python tools/summarize_predictions.py --test-dir "{run_dir}/test"', flush=True)
+    print("  test.py完成评估后会自动生成逐工况PNG、training_losses.png和summary_by_kind.csv", flush=True)
+    print(f'  如需单独重绘：python plot_results.py --test-dir "{run_dir}/test"', flush=True)
     print("=" * 72, flush=True)
     return run_dir
 

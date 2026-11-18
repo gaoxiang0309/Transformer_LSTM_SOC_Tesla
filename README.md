@@ -9,6 +9,8 @@
 
 实验性的 `q_v` 消融把第一阶段输入改为 `[V,I,T]`，同时保留LSTM的四维基础输入、物理锚和ΔAh。通过配置 `q_input_features=3` 启用，默认值 `4` 保持原有 `q_Ah` 链路。
 
+实验三在LSTM融合列末端追加60秒因果统计 `[V_mean_60,I_mean_60,V_dev_60,I_dev_60]`，输入维度变为12。
+
 ## 1. 本轮任务边界（对齐《BIT_SOC_数据窗口与状态划分》）
 
 | 决策 | 本项目的做法 |
@@ -61,7 +63,7 @@
 - 两阶段冻结训练；RMSprop、MSE、Transformer batch 1024、LSTM batch 256、Transformer lr 5e-4、LSTM lr 1e-3、最多 400 轮、patience 20、梯度裁剪 1.0。
 - 输出 `linear`，不做 sigmoid 截断；`use_physics_anchor`/`use_delta_ah`/`anchor_mode` 可分别配置做消融。
 - 扰动训练（方案一，与门控软锚配合）：默认 `perturb_train=true`、`perturb_mode=ramp`——注入电流零偏 `b(t)=b0+tc·(T−25℃)`，`b0∈±perturb_amp(0.05 A)`、温漂系数 `tc∈±perturb_tc(0.001 A/℃)`，`Ah误差=∫b dt/3600/C`（约 0.6~1.6 pp / 约 2 h 行车）；`perturb_seed` 控制随机源，`t_norm_low/high` 用于把归一化 T 还原成℃。也可切 `step` 做固定 Ah 偏移。
-- 权重复用：`init_transformer_from` / `init_lstm_from` 分别给 Transformer / LSTM 提供**预训练初始权重，随后仍继续训练/微调**（仅缩短训练，不是直接复用）。预训练权重已复制到项目内 `pretrained/`；LSTM 从旧 hard 权重 warm-start 用 `strict=False`（gate_head 保持 α≈1 初始化）。
+- 权重复用：`init_transformer_from` / `init_lstm_from` 分别指定项目内权重。实验三从 `pretrained/exp_batch1_qah_control/` 读取q_Ah控制组最佳权重，冻结Transformer，并扩展LSTM输入投影复用原有8列权重。权重来源和SHA-256记录在 `pretrained/README.md`。
 
 ## 4. 文件结构
 
@@ -76,6 +78,7 @@ Transformer_LSTM_SOC_Tesla/
 ├── model/                    Transformer、LSTM、训练工具
 ├── tools/                    数据加载、实验目录、评估、按状态汇总
 ├── data/processed/           已准备的行车 NPZ 与 manifest
+├── pretrained/                项目内嵌的预训练和实验复用权重
 ├── docs/                     数据窗口、复现假设、代码复用与运行记录
 ├── tests/test_pipeline.py    时间对齐、因果性等检查
 └── run/train/exp*/           训练产物（当前为空，服务器训练后生成）
@@ -122,6 +125,17 @@ python tools/compare_robustness.py --first <QAH_RUN_DIR>/analysis/ramp_robustnes
 
 q_v消融直接复用当前四维 `data/processed`，无需重新运行 `prepare_data.py`。只有改变采样、窗口、清洗或归一化时才需要重新准备数据。
 
+## 实验三 60秒因果V/I历史统计
+
+配置 `configs/exp_batch3_qah_history60.json` 在LSTM融合阶段追加四列历史统计。它们按当前及过去60秒计算，依次为 `V_mean_60`、`I_mean_60`、`V_dev_60` 和 `I_dev_60`。统计量在完整序列上计算后再裁切，序列边界独立重置。Transformer从项目内 `pretrained/exp_batch1_qah_control/` 复用最佳权重，旧LSTM权重的前8列通过输入投影扩展继续warm-start，新增4列使用当前模型初始化。
+
+```bash
+python main.py --config configs/exp_batch3_qah_history60.json --device cuda:0
+python test.py --run run/train/exp_batch3_qah_history60 --device cuda:0
+python tools/evaluate_ramp_robustness.py --run run/train/exp_batch3_qah_history60 --split validation --device cuda:0
+python tools/compare_robustness.py --first <QAH_ANALYSIS_DIR> --second run/train/exp_batch3_qah_history60/analysis/ramp_robustness_validation --output qah_history60_robustness_comparison.csv
+```
+
 ## 8. 正式训练、测试、绘图
 
 服务器上的完整命令见本文末尾；流程是：
@@ -129,11 +143,9 @@ q_v消融直接复用当前四维 `data/processed`，无需重新运行 `prepare
 ```bash
 python main.py --config configs/tesla_start.json --device cuda:0
 python test.py --run <RUN_DIR> --device cuda:0
-python plot_results.py --test-dir <RUN_DIR>/test
-python tools/summarize_predictions.py --test-dir <RUN_DIR>/test
 ```
 
-`RUN_DIR` 以 `main.py` 打印的为准（例如 `run/train/exp`；若先跑过 smoke，则正式训练会新建 `exp1`）。两阶段各最多 400 轮，验证 MSE 连续 20 轮不改善即早停。
+`RUN_DIR` 以 `main.py` 打印的为准（例如 `run/train/exp`；若先跑过 smoke，则正式训练会新建 `exp1`）。两阶段各最多 400 轮，验证 MSE 连续 20 轮不改善即早停。`test.py` 会自动生成逐工况PNG、`training_losses.png`、`summary_by_kind.csv`、`predictions.csv`和指标文件。需要单独重绘时再执行 `python plot_results.py --test-dir <RUN_DIR>/test`。
 
 ## 9. 主要输出
 
@@ -141,7 +153,7 @@ python tools/summarize_predictions.py --test-dir <RUN_DIR>/test
 - `weights/transformer_best.pt`、`lstm_best.pt`：按验证 MSE 选择。
 - `transformer_history.csv`、`lstm_history.csv`：逐轮训练/验证 MSE。
 - `cache/`：冻结 Transformer 生成的 q 维（附权重 SHA-256）。
-- `test*/predictions.csv`、`metrics.json`、`metrics_by_case.csv`、`summary_by_kind.csv`、`*.png`。
+- `test*/predictions.csv`、`metrics.json`、`metrics_by_case.csv`、`summary_by_kind.csv`、逐工况PNG和`training_losses.png`。
 - `metrics.json` 含 `state_filter`、`window_seconds`、`first_valid_local_target=358`、`coverage_ratio` 等字段，便于如实报告冷启动覆盖。
 - 指标单位为百分点（pp），原始预测不裁剪。
 
@@ -185,8 +197,7 @@ python main.py --config configs/tesla_start.json --device cuda:0 2>&1 | tee run_
 python test.py --run <RUN_DIR> --device cuda:0 2>&1 | tee run_test.log
 
 # 6) 绘图与分组汇总（<TEST_DIR> = <RUN_DIR>/test）
-python plot_results.py --test-dir <TEST_DIR>
-python tools/summarize_predictions.py --test-dir <TEST_DIR>
+python plot_results.py --test-dir <RUN_DIR>/test
 ```
 
 没有 GPU 时把 `--device cuda:0` 改为 `--device cpu`；设备也可以不写，默认 `auto`。

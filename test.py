@@ -13,6 +13,8 @@ from model.lstm_model import LSTMSOC
 from model.train_utils import restore, get_device, make_fused_sequences, seed_everything
 from tools.data_loader import load_sequences, WindowDataset, sha256
 from tools.evaluation import evaluate
+from plot_results import plot_results
+from tools.summarize_predictions import summarize
 
 
 def run(args):
@@ -74,12 +76,21 @@ def run(args):
         short_window=cfg.short_window,
         base_input_features=cfg.input_features,
         q_input_features=cfg.q_input_features,
+        use_history_stats=cfg.use_history_stats,
+        history_window_seconds=cfg.history_window_seconds,
         stride=cfg.eval_stride,
         first_valid_local_target=cfg.long_window + cfg.short_window - 2,
         sequence_names=[s.name for s in sequences],
     )
     report = evaluate(dataset, lstm, cfg, device, output, metadata)
+    try:
+        plot_results(output)
+    except ModuleNotFoundError as error:
+        print("绘图未生成，请安装matplotlib:", error, flush=True)
+    summarize(output)
     print("TEST_OUTPUT:", output)
+    print("PLOTS_OUTPUT:", output)
+    print("SUMMARY_OUTPUT:", output / "summary_by_kind.csv")
     print("Transformer:", report["aggregate_transformer"])
     print("Collaborative:", report["aggregate_collaborative"])
     if cfg.smoke:

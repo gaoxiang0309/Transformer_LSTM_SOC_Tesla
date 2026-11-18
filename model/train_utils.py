@@ -90,13 +90,33 @@ def save_checkpoint(path, payload):
     temp.replace(path)
 
 
-def restore(model, path, device, strict=True):
+def restore(model, path, device, strict=True, allow_input_expansion=False):
     """读取checkpoint，将权重载入模型并设置推理模式，返回checkpoint中的其他信息。
 
     :param strict: False时允许缺失/多余键，用于从旧结构（如无gate_head的hard锚）warm-start。
+    :param allow_input_expansion: 允许把旧LSTM输入投影复制到新增输入列，新增列保留当前模型初始化。
     """
     state = torch.load(path, map_location=device, weights_only=True)
-    model.load_state_dict(state["model"], strict=strict)
+    model_state = dict(state["model"])
+    if allow_input_expansion:
+        current_state = model.state_dict()
+        for name, value in list(model_state.items()):
+            target = current_state.get(name)
+            if target is None or target.shape == value.shape:
+                continue
+            if (
+                name == "lstm.weight_ih_l0"
+                and value.ndim == 2
+                and target.ndim == 2
+                and value.shape[0] == target.shape[0]
+            ):
+                adapted = target.clone()
+                columns = min(value.shape[1], target.shape[1])
+                adapted[:, :columns] = value[:, :columns].to(target.device)
+                model_state[name] = adapted
+            elif not strict:
+                model_state.pop(name)
+    model.load_state_dict(model_state, strict=strict)
     model.to(device).eval()
     return state
 
@@ -186,6 +206,38 @@ def _rolling_delta(values, window):
     return out
 
 
+def _rolling_mean(values, window):
+    """计算因果滚动均值，序列开始处使用已有历史的截短均值。"""
+    values = np.asarray(values, dtype=np.float64)
+    if values.ndim != 1:
+        raise ValueError("滚动均值输入必须是一维数组")
+    if values.size == 0:
+        return values.copy()
+    cumulative = np.concatenate(([0.0], np.cumsum(values)))
+    ends = np.arange(1, values.size + 1)
+    starts = np.maximum(0, ends - window)
+    counts = ends - starts
+    return (cumulative[ends] - cumulative[starts]) / counts
+
+
+def _history_statistics(values, window):
+    """返回[V_mean,I_mean,V_dev,I_dev]，输入V/I已按训练侧通道归一化。"""
+    if values.shape[1] < 2:
+        raise ValueError("历史统计特征需要至少包含V和I两列")
+    voltage = values[:, 0].astype(np.float64)
+    current = values[:, 1].astype(np.float64)
+    voltage_mean = _rolling_mean(voltage, window)
+    current_mean = _rolling_mean(current, window)
+    return np.column_stack(
+        [
+            voltage_mean,
+            current_mean,
+            voltage - voltage_mean,
+            current - current_mean,
+        ]
+    ).astype(np.float32)
+
+
 def _perturb_ah(x, cfg, rng):
     """给输入第3列(Ah)注入 step/ramp 偏置并重归一化；V/I/T 与标签不变。
 
@@ -218,6 +270,7 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
     基础列始终保留为[V,I,T,Ah]或[V,I,T]，q追加在基础列之后。
     Transformer只读取前q_input_features列，因此可以比较q_Ah与q_v。
     ΔAh在完整序列上计算后再裁去Transformer预热前缀，避免边界处丢失已有历史。
+    历史统计在完整序列上计算，追加列为[V_mean,I_mean,V_dev,I_dev]。
     perturb=True时仅对训练集输入注入Ah偏置，label保持干净。
     """
     transformer.to(device).eval()
@@ -263,6 +316,9 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
             d_short = d_short_full[first:]
             d_long = d_long_full[first:]
             x = np.column_stack([x, d_short, d_long]).astype("float32")
+        if cfg.use_history_stats:
+            history_full = _history_statistics(seq.x, cfg.history_window)
+            x = np.column_stack([x, history_full[first:]]).astype("float32")
         if x.shape[1] != cfg.lstm_input_features:
             raise ValueError(
                 f"融合特征列数{x.shape[1]}与lstm_input_features={cfg.lstm_input_features}不一致"
@@ -283,6 +339,8 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
                 transformer_sha256=np.asarray(checkpoint_sha),
                 base_input_features=np.asarray(cfg.input_features),
                 q_input_features=np.asarray(cfg.q_input_features),
+                use_history_stats=np.asarray(cfg.use_history_stats),
+                history_window=np.asarray(cfg.history_window),
             )
     if skipped:
         print("因长窗口历史不足而跳过：", skipped, flush=True)

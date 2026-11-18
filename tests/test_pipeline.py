@@ -120,6 +120,56 @@ class PipelineTests(unittest.TestCase):
         # dAh_300在这里使用可用的16点历史，物理Ah差值为(15-0)/100*1.4。
         self.assertAlmostEqual(float(fused.x[0, 7]), 0.21, places=6)
 
+    def test_history_statistics_are_causal_and_appended(self):
+        """历史统计只使用当前及过去数据，并追加在原有融合列之后。"""
+        cfg = Config(use_history_stats=True).smoke_config()
+        n = 40
+        x = np.zeros((n, cfg.input_features), dtype="float32")
+        x[:, 0] = np.arange(n, dtype="float32") / 100.0
+        x[:, 1] = np.arange(n, dtype="float32") / 200.0
+        y = np.linspace(0.0, 1.0, n, dtype="float32")
+        sequence = Sequence("history_stats", x, y)
+
+        class Dummy(torch.nn.Module):
+            """返回固定q，避免测试依赖模型权重。"""
+
+            def forward(self, values):
+                return torch.zeros(values.shape[0])
+
+        fused = make_fused_sequences(Dummy(), [sequence], cfg, torch.device("cpu"))[0]
+        self.assertEqual(fused.x.shape[1], cfg.lstm_input_features)
+        self.assertEqual(fused.x.shape[1], 12)
+        # 首个融合点对应原序列第15点，history_window=60时使用已有的16点截短均值。
+        np.testing.assert_allclose(
+            fused.x[0, 8:12],
+            np.asarray([0.075, 0.0375, 0.075, 0.0375], dtype="float32"),
+            rtol=0,
+            atol=1e-6,
+        )
+
+    def test_lstm_input_expansion_preserves_old_weights(self):
+        """新增历史统计列时，旧LSTM输入投影的已有列仍能warm-start。"""
+        old_cfg = Config().smoke_config()
+        new_cfg = Config(use_history_stats=True).smoke_config()
+        old_model = LSTMSOC(old_cfg)
+        new_model = LSTMSOC(new_cfg)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "lstm.pt"
+            save_checkpoint(path, {"model": old_model.state_dict()})
+            restore(
+                new_model,
+                path,
+                torch.device("cpu"),
+                strict=False,
+                allow_input_expansion=True,
+            )
+        torch.testing.assert_close(
+            new_model.lstm.weight_ih_l0[:, : old_cfg.lstm_input_features],
+            old_model.lstm.weight_ih_l0,
+            rtol=0,
+            atol=0,
+        )
+
     def test_model_gradients_and_variable_window_length(self):
         """检查不同长度输入的输出形状、梯度有限性和每头key维度。"""
         model = make_model(self.cfg)

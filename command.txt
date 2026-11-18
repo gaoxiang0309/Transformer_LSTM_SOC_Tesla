@@ -27,9 +27,8 @@ python main.py --config configs/tesla_start.json --device cuda:1 2>&1 | tee run_
 RUN_DIR=run/train/exp1
 python test.py --run "$RUN_DIR" --device cuda:0 2>&1 | tee run_test.log
 
-# 6) 绘图 + 分组汇总
+# 6) test.py已经自动生成绘图和分组汇总。需要重绘时执行：
 python plot_results.py --test-dir "$RUN_DIR/test"
-python tools/summarize_predictions.py --test-dir "$RUN_DIR/test"
 
 # 7) 查看汇总指标
 python - <<'PY'
