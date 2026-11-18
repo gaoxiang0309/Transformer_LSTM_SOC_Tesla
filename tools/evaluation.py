@@ -15,7 +15,7 @@ from model.train_utils import loader
 
 def metrics(reference, predicted):
     # 内部SOC采用0～1；乘100后得到百分点，而非MAPE相对百分比。
-    """计算样本数、MAE/RMSE/最大误差和预测超界数，误差以百分点报告。"""
+    """计算MAE、RMSE、有符号误差、P95、最大误差和预测超界数。"""
     error = np.asarray(predicted) - np.asarray(reference)
     if error.size == 0:
         raise ValueError("没有可评估样本")
@@ -23,6 +23,8 @@ def metrics(reference, predicted):
         n=int(error.size),
         mae_pp=float(np.mean(np.abs(error)) * 100),
         rmse_pp=float(np.sqrt(np.mean(error**2)) * 100),
+        mean_signed_error_pp=float(np.mean(error) * 100),
+        p95_abs_pp=float(np.percentile(np.abs(error), 95) * 100),
         max_abs_pp=float(np.max(np.abs(error)) * 100),
         outside_0_1=int(np.sum((np.asarray(predicted) < 0) | (np.asarray(predicted) > 1))),
     )
@@ -54,8 +56,9 @@ def evaluate(dataset, model, cfg, device, output, metadata):
         with torch.inference_mode():
             for x, y, seq_ids, ends in loader(dataset, cfg.lstm_batch, False, cfg):
                 final = model(x.to(device)).cpu().numpy()
-                # q追加在输入特征之后，索引为cfg.input_features（3维输入时为3，4维时为4）。
-                # 它与LSTM输出共享同一个参考y[t]，不能分别选不同的评估区间。
+                # q追加在LSTM基础输入之后，索引为cfg.input_features。
+                # q_input_features只控制Transformer读取哪些列，不改变融合列布局。
+                # q与LSTM输出共享同一个参考y[t]，不能分别选不同的评估区间。
                 baseline = x[:, -1, cfg.input_features].numpy()
                 reference = y.numpy()
                 for i, seq_id in enumerate(seq_ids.tolist()):
@@ -114,7 +117,19 @@ def evaluate(dataset, model, cfg, device, output, metadata):
     )
     with (output / "metrics_by_case.csv").open("w", newline="", encoding="utf-8-sig") as stream:
         writer = csv.writer(stream)
-        writer.writerow(["case", "model", "n", "mae_pp", "rmse_pp", "max_abs_pp", "outside_0_1"])
+        writer.writerow(
+            [
+                "case",
+                "model",
+                "n",
+                "mae_pp",
+                "rmse_pp",
+                "mean_signed_error_pp",
+                "p95_abs_pp",
+                "max_abs_pp",
+                "outside_0_1",
+            ]
+        )
         for name, case_metrics in per_case.items():
             for model_name, model_metrics in case_metrics.items():
                 # 显式写出字段顺序，避免依赖字典values的隐含顺序来理解CSV列。
@@ -125,6 +140,8 @@ def evaluate(dataset, model, cfg, device, output, metadata):
                         model_metrics["n"],
                         model_metrics["mae_pp"],
                         model_metrics["rmse_pp"],
+                        model_metrics["mean_signed_error_pp"],
+                        model_metrics["p95_abs_pp"],
                         model_metrics["max_abs_pp"],
                         model_metrics["outside_0_1"],
                     ]

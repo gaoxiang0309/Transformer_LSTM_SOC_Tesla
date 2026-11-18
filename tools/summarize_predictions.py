@@ -2,7 +2,7 @@
 
 输入为某次测试输出目录中的 predictions.csv；输出为按 case 类型（drive/charge）
 和温度分组的 MAE/RMSE，写入 summary_by_kind.csv 并打印。
-不重新训练、不改变原始预测，只做分组统计。
+不重新训练、不改变原始预测，只做分组统计。输出包含MAE、RMSE、平均有符号误差、P95和最大绝对误差。
 """
 import argparse
 import csv
@@ -26,12 +26,14 @@ def is_charge(cycle):
 
 
 def metrics(reference, prediction):
-    """计算MAE/RMSE/最大误差，单位百分点。"""
+    """计算误差汇总，单位百分点。"""
     error = np.asarray(prediction) - np.asarray(reference)
     return dict(
         n=int(error.size),
         mae_pp=float(np.mean(np.abs(error)) * 100),
         rmse_pp=float(np.sqrt(np.mean(error**2)) * 100),
+        mean_signed_error_pp=float(np.mean(error) * 100),
+        p95_abs_pp=float(np.percentile(np.abs(error), 95) * 100),
         max_abs_pp=float(np.max(np.abs(error)) * 100),
     )
 
@@ -62,7 +64,18 @@ def summarize(test_dir):
     output = test_dir / "summary_by_kind.csv"
     with output.open("w", newline="", encoding="utf-8-sig") as stream:
         writer = csv.DictWriter(
-            stream, fieldnames=["group", "key", "model", "n", "mae_pp", "rmse_pp", "max_abs_pp"]
+            stream,
+            fieldnames=[
+                "group",
+                "key",
+                "model",
+                "n",
+                "mae_pp",
+                "rmse_pp",
+                "mean_signed_error_pp",
+                "p95_abs_pp",
+                "max_abs_pp",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows)

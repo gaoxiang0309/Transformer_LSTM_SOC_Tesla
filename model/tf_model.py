@@ -215,14 +215,14 @@ class Encoder(nn.Module):
 
 
 class TransformerSOC(nn.Module):
-    """第一阶段SOC回归网络：[B,L,F]输入转换为[B]初步SOC估计，F=3或4。"""
+    """第一阶段SOC回归网络，输入列数由q_input_features决定。"""
 
     def __init__(self, cfg):
         """创建连续输入投影、位置编码、Encoder和标量回归头，并初始化权重。"""
         super().__init__()
-        # F=3为[V,I,T]，F=4为[V,I,T,Ah]；由config.input_features决定。
-        self.input_features = cfg.input_features
-        self.input_projection = nn.Linear(cfg.input_features, cfg.d_model)
+        # q_input_features=3时为[V,I,T]，4时为[V,I,T,Ah]。
+        self.input_features = cfg.q_input_features
+        self.input_projection = nn.Linear(cfg.q_input_features, cfg.d_model)
         self.position = PositionalEncoding(cfg.d_model, cfg.dropout, cfg.long_window)
         layer = EncoderLayer(
             cfg.d_model,

@@ -78,6 +78,48 @@ class PipelineTests(unittest.TestCase):
         )
         self.assertTrue(all(not p.requires_grad for p in model.parameters()))
 
+    def test_transformer_can_read_fewer_columns_than_lstm(self):
+        """q_v模式只把[V,I,T]送入Transformer，融合仍保留四维基础输入。"""
+        cfg = Config(q_input_features=3).smoke_config()
+
+        class FeatureCountingDummy(torch.nn.Module):
+            """检查q生成时的输入列数，并返回末端第一列作为模拟q。"""
+
+            def forward(self, x):
+                self.last_features = x.shape[-1]
+                return x[:, -1, 0]
+
+        model = FeatureCountingDummy()
+        fused = make_fused_sequences(
+            model, [self.sequence()], cfg, torch.device("cpu")
+        )[0]
+        self.assertEqual(model.last_features, 3)
+        self.assertEqual(fused.x.shape[1], cfg.lstm_input_features)
+        self.assertEqual(fused.x.shape[1], 8)
+        qv_model = make_model(cfg)
+        output = qv_model(torch.randn(2, cfg.long_window, cfg.q_input_features))
+        self.assertEqual(tuple(output.shape), (2,))
+
+    def test_delta_ah_uses_history_before_transformer_crop(self):
+        """长窗预热结束时的dAh应使用原序列已有历史，而不是从零开始。"""
+        cfg = Config().smoke_config()
+        n = 40
+        x = np.zeros((n, cfg.input_features), dtype="float32")
+        x[:, 3] = np.arange(n, dtype="float32") / 100.0
+        y = np.linspace(0.0, 1.0, n, dtype="float32")
+        sequence = Sequence("ah_history", x, y)
+
+        class Dummy(torch.nn.Module):
+            """返回固定q，避免测试依赖模型权重。"""
+
+            def forward(self, values):
+                return torch.zeros(values.shape[0])
+
+        fused = make_fused_sequences(Dummy(), [sequence], cfg, torch.device("cpu"))[0]
+        # smoke配置的长窗为16，首个融合点对应原序列第15点。
+        # dAh_300在这里使用可用的16点历史，物理Ah差值为(15-0)/100*1.4。
+        self.assertAlmostEqual(float(fused.x[0, 7]), 0.21, places=6)
+
     def test_model_gradients_and_variable_window_length(self):
         """检查不同长度输入的输出形状、梯度有限性和每头key维度。"""
         model = make_model(self.cfg)

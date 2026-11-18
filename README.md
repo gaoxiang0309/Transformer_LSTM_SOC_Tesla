@@ -7,6 +7,8 @@
 短窗[V,I,T,Ah,q,anchor,ΔAh_60,ΔAh_300] → LSTM → α·anchor + (1−α)·q + 残差 → 当前SOC
 ```
 
+实验性的 `q_v` 消融把第一阶段输入改为 `[V,I,T]`，同时保留LSTM的四维基础输入、物理锚和ΔAh。通过配置 `q_input_features=3` 启用，默认值 `4` 保持原有 `q_Ah` 链路。
+
 ## 1. 本轮任务边界（对齐《BIT_SOC_数据窗口与状态划分》）
 
 | 决策 | 本项目的做法 |
@@ -101,6 +103,24 @@ python test.py --run run/train/exp
 ```
 
 `--smoke` 用 2 条截短序列、每阶段 1 轮，只验证链路，不能作为精度结果。
+
+## q_Ah 与 q_v 配对消融
+
+两份配置固定相同的窗口、扰动训练、dual门控和LSTM输入。控制组使用 `configs/exp_batch1_qah_control.json`，实验组使用 `configs/exp_batch1_qv.json`，运行目录前缀分别为 `exp_batch1_qah_control` 和 `exp_batch1_qv`。q_v组的Transformer只读取[V,I,T]，不能直接加载四维Transformer的输入投影权重，因此配置中不使用Transformer warm-start。
+
+```bash
+python main.py --config configs/exp_batch1_qah_control.json --device cuda:0
+python main.py --config configs/exp_batch1_qv.json --device cuda:0
+python test.py --run <QAH_RUN_DIR> --device cuda:0
+python test.py --run <QV_RUN_DIR> --device cuda:0
+python tools/evaluate_ramp_robustness.py --run <QAH_RUN_DIR> --split validation --device cuda:0
+python tools/evaluate_ramp_robustness.py --run <QV_RUN_DIR> --split validation --device cuda:0
+python tools/compare_robustness.py --first <QAH_RUN_DIR>/analysis/ramp_robustness_validation --second <QV_RUN_DIR>/analysis/ramp_robustness_validation --output qv_robustness_comparison.csv
+```
+
+`evaluate_ramp_robustness.py`只在内存中构造干净、Ah-only ramp和I+Ah coupled ramp，不改写 `data/processed`。每个条件输出 `predictions.csv`、`metrics.json`，顶层输出 `robustness_summary.csv`。
+
+q_v消融直接复用当前四维 `data/processed`，无需重新运行 `prepare_data.py`。只有改变采样、窗口、清洗或归一化时才需要重新准备数据。
 
 ## 8. 正式训练、测试、绘图
 

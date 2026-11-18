@@ -207,7 +207,7 @@ def _perturb_ah(x, cfg, rng):
         tc = float(rng.uniform(-cfg.perturb_tc, cfg.perturb_tc))
         T = x[:, 2] * (cfg.t_norm_high - cfg.t_norm_low) + cfg.t_norm_low  # 还原℃
         b = b0 + tc * (T - 25.0)  # 温漂：25℃处零偏=b0
-        ah += np.cumsum(b) / 3600.0 / cfg.capacity_ah  # 1 Hz，dt=1s
+        ah += np.cumsum(b) * cfg.sample_interval_s / 3600.0 / cfg.capacity_ah
     x[:, 3] = (ah - cfg.ah_norm_low) / (cfg.ah_norm_high - cfg.ah_norm_low)
     return x.astype(np.float32)
 
@@ -215,10 +215,10 @@ def _perturb_ah(x, cfg, rng):
 def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, checkpoint_sha="", perturb=False):
     """冻结Transformer生成q，并拼接物理锚与ΔAh特征，返回Sequence列表。
 
-    列顺序：[V,I,T,Ah, q, anchor, dAh_K, dAh_L]（按开关拼接）。
-    每个q[s]独立使用[s-L+1,s]，不一次编码整段后回取历史位置。
-    新序列会裁去L-1个无初估的点，offset同步更新。
-    perturb=True 时对训练集给Ah注入偏置（方案一），label保持干净，供扰动训练。
+    基础列始终保留为[V,I,T,Ah]或[V,I,T]，q追加在基础列之后。
+    Transformer只读取前q_input_features列，因此可以比较q_Ah与q_v。
+    ΔAh在完整序列上计算后再裁去Transformer预热前缀，避免边界处丢失已有历史。
+    perturb=True时仅对训练集输入注入Ah偏置，label保持干净。
     """
     transformer.to(device).eval()
     # eval关闭dropout；requires_grad_(False)冻结参数，两者作用不同。
@@ -231,7 +231,8 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
         if perturb and cfg.use_ah_feature and rng.random() < cfg.perturb_prob:
             x_arr = _perturb_ah(sequence.x, cfg, rng)
         seq = Sequence(sequence.name, x_arr, sequence.y, sequence.offset, sequence.source)
-        dataset = WindowDataset([seq], cfg.long_window)
+        q_columns = tuple(range(cfg.q_input_features))
+        dataset = WindowDataset([seq], cfg.long_window, feature_indices=q_columns)
         if len(dataset) == 0:
             skipped.append(sequence.name)
             continue
@@ -255,9 +256,12 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
             anchor = (float(q[0]) - float(coulomb[0])) + coulomb
             x = np.column_stack([x, anchor]).astype("float32")
         if cfg.use_delta_ah:
-            ah_raw = base_x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
-            d_short = _rolling_delta(ah_raw, cfg.short_window)
-            d_long = _rolling_delta(ah_raw, cfg.long_window)
+            # 在裁切前计算完整序列的历史差分，再同步裁切到q的有效起点。
+            full_ah_raw = seq.x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
+            d_short_full = _rolling_delta(full_ah_raw, cfg.short_window)
+            d_long_full = _rolling_delta(full_ah_raw, cfg.long_window)
+            d_short = d_short_full[first:]
+            d_long = d_long_full[first:]
             x = np.column_stack([x, d_short, d_long]).astype("float32")
         if x.shape[1] != cfg.lstm_input_features:
             raise ValueError(
@@ -277,6 +281,8 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
                 Y=fused.y,
                 first_original_row=np.asarray(fused.offset),
                 transformer_sha256=np.asarray(checkpoint_sha),
+                base_input_features=np.asarray(cfg.input_features),
+                q_input_features=np.asarray(cfg.q_input_features),
             )
     if skipped:
         print("因长窗口历史不足而跳过：", skipped, flush=True)

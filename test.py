@@ -72,6 +72,8 @@ def run(args):
         coverage_ratio=coverage_ratio,
         long_window=cfg.long_window,
         short_window=cfg.short_window,
+        base_input_features=cfg.input_features,
+        q_input_features=cfg.q_input_features,
         stride=cfg.eval_stride,
         first_valid_local_target=cfg.long_window + cfg.short_window - 2,
         sequence_names=[s.name for s in sequences],

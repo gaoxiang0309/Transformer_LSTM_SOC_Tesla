@@ -24,6 +24,13 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="gxy@10.1.77.215:22 password">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
     </serverData>
   </component>
 </project>

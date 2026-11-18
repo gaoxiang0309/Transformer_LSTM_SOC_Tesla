@@ -7,12 +7,12 @@
 from pathlib import Path
 
 
-def create_exp_folder(root):
-    """寻找未使用的exp编号，新建weights/cache子目录并返回实验路径。"""
+def create_exp_folder(root, prefix="exp"):
+    """寻找未使用的实验目录前缀，新建weights/cache子目录并返回路径。"""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     for i in range(100000):
-        path = root / ("exp" if i == 0 else f"exp{i}")
+        path = root / (prefix if i == 0 else f"{prefix}{i}")
         try:
             path.mkdir()
         except FileExistsError:

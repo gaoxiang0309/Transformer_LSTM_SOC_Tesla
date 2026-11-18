@@ -56,7 +56,7 @@ def run(args):
     if args.run:
         run_dir = Path(args.run).resolve()
     else:
-        run_dir = create_exp_folder(cfg.run_dir)
+        run_dir = create_exp_folder(cfg.run_dir, cfg.experiment_name or "exp")
     data_sha = sha256(manifest_path)
     if args.run:
         old = json.loads((run_dir / "environment.json").read_text(encoding="utf-8"))
@@ -74,6 +74,8 @@ def run(args):
             boundary_status=manifest["boundary_status"],
             state_filter=manifest.get("state_filter"),
             sampling_interval_s=cfg.sample_interval_s,
+            base_input_features=cfg.input_features,
+            q_input_features=cfg.q_input_features,
             window_seconds=dict(
                 long=cfg.long_window_seconds, short=cfg.short_window_seconds
             ),
@@ -103,9 +105,14 @@ def run(args):
             # 用预训练权重做初始化（缩短训练），随后仍继续训练/微调。
             restore(transformer, Path(cfg.init_transformer_from), device)
             print("预训练初始化 Transformer（继续微调）:", cfg.init_transformer_from, flush=True)
-        # 长窗输入[B,L,3]，目标是窗口最后一个时刻的SOC。
-        train_dataset = WindowDataset(train, cfg.long_window, cfg.train_stride)
-        validation_dataset = WindowDataset(val, cfg.long_window, cfg.eval_stride)
+        # Transformer只读取q_input_features列，LSTM仍保留完整基础输入列。
+        q_columns = tuple(range(cfg.q_input_features))
+        train_dataset = WindowDataset(
+            train, cfg.long_window, cfg.train_stride, feature_indices=q_columns
+        )
+        validation_dataset = WindowDataset(
+            val, cfg.long_window, cfg.eval_stride, feature_indices=q_columns
+        )
         train_model(
             transformer,
             train_dataset,

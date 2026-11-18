@@ -59,13 +59,25 @@ def load_sequences(cfg, split):
 class WindowDataset(Dataset):
     """在各段内部按需构造重叠窗口，避免预先复制出全部窗口数组。"""
 
-    def __init__(self, sequences, length, stride=1):
-        """保存序列、窗口长度和步长，建立每段窗口数量的前缀和。"""
+    def __init__(self, sequences, length, stride=1, feature_indices=None):
+        """保存窗口参数，可选地只返回指定输入列。"""
         if length < 1 or stride < 1:
             raise ValueError("窗口和步长必须为正")
         self.sequences = sequences
         self.length = length
         self.stride = stride
+        self.feature_indices = None if feature_indices is None else tuple(feature_indices)
+        if self.feature_indices is not None:
+            if not self.feature_indices:
+                raise ValueError("feature_indices不能为空")
+            if any(index < 0 for index in self.feature_indices):
+                raise ValueError("feature_indices不能包含负数")
+            if sequences and any(
+                index >= sequence.x.shape[1]
+                for sequence in sequences
+                for index in self.feature_indices
+            ):
+                raise ValueError("feature_indices超出序列输入列范围")
         self.cumulative = [0]
         for sequence in sequences:
             # N个点、长度L、步长stride，可构造floor((N-L)/stride)+1个窗口。
@@ -92,6 +104,9 @@ class WindowDataset(Dataset):
         sequence_index, end = self.locate(index)
         sequence = self.sequences[sequence_index]
         # Python切片右端不包含，因此使用end+1取到目标时刻这一行。
-        window = torch.from_numpy(sequence.x[end - self.length + 1 : end + 1].copy())
+        values = sequence.x[end - self.length + 1 : end + 1]
+        if self.feature_indices is not None:
+            values = values[:, self.feature_indices]
+        window = torch.from_numpy(values.copy())
         target = torch.tensor(sequence.y[end], dtype=torch.float32)
         return window, target, sequence_index, end

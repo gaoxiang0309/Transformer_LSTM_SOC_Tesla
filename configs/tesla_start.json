@@ -9,6 +9,7 @@
   "max_parking_seconds": 1800.0,
   "max_gap_seconds": 60.0,
   "use_ah_feature": true,
+  "q_input_features": 4,
   "capacity_ah": 4.5,
   "capacity_by_temperature": {
     "-20C": 4.209,

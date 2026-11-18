@@ -22,6 +22,8 @@ class Config:
     )
     processed_dir: str = str(ROOT / "data" / "processed")
     run_dir: str = str(ROOT / "run" / "train")
+    # 新实验的目录前缀。留空时沿用exp、exp1等旧命名方式。
+    experiment_name: str = ""
     seed: int = 42
     device: str = "auto"
     # 回归输出的范围约束。Tesla参考SOC可略超1，因此默认linear、允许越界。
@@ -43,7 +45,10 @@ class Config:
     # 该特征只由电流积分得到，不读取真实SOC；每条序列从0开始积分。
     use_ah_feature: bool = True
     capacity_ah: float = 4.5  # Tesla 2170 额定容量
-    input_features: int = 4  # 由 use_ah_feature 在 validate() 中确定（3或4）
+    input_features: int = 4  # LSTM保留的基础输入列数，由use_ah_feature派生
+    # q的Transformer输入列数。0表示与基础输入相同，3表示只使用[V,I,T]。
+    # 该字段与LSTM是否使用Ah分开，支持q_Ah与q_v的配对消融。
+    q_input_features: int = 0
     # 温度相关容量表（由m80训练集按 SOC~Ah 斜率拟合），用于把Ah换算到SOC单位。
     # capacity_by_temperature 为实际可用容量(Ah)；scale=capacity_ah/C(T)。
     capacity_by_temperature: dict = field(
@@ -154,6 +159,8 @@ class Config:
             else:
                 absolute_path = path.resolve()
             setattr(self, name, str(absolute_path))
+        if self.experiment_name and Path(self.experiment_name).name != self.experiment_name:
+            raise ValueError("experiment_name只能是单层目录名")
         if self.init_lstm_from:
             warm = Path(self.init_lstm_from)
             if not warm.is_absolute():
@@ -190,8 +197,15 @@ class Config:
             raise ValueError("perturb_prob需要位于(0,1]")
         if self.t_norm_high <= self.t_norm_low:
             raise ValueError("t_norm_high必须大于t_norm_low")
-        # 输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
+        # LSTM基础输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
         self.input_features = 4 if self.use_ah_feature else 3
+        # Transformer可以单独少读Ah，但不能读取基础输入之外的列。
+        if self.q_input_features == 0:
+            self.q_input_features = self.input_features
+        if not (3 <= self.q_input_features <= self.input_features):
+            raise ValueError(
+                "q_input_features需要位于3和input_features之间，0表示使用全部基础输入"
+            )
         # LSTM列顺序：[输入特征..., q, anchor, dAh_K, dAh_L]，按开关拼列。
         self.lstm_input_features = (
             self.input_features
