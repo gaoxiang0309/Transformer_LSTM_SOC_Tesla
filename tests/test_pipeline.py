@@ -147,6 +147,41 @@ class PipelineTests(unittest.TestCase):
             atol=1e-6,
         )
 
+    def test_load_statistics_are_causal_and_appended(self):
+        """负载RMS和正电流比例只使用当前及过去数据，并追加两列。"""
+        cfg = Config(use_load_stats=True).smoke_config()
+        n = 40
+        x = np.zeros((n, cfg.input_features), dtype="float32")
+        raw_current = np.arange(n, dtype="float64")
+        x[:, 1] = ((raw_current - cfg.current_norm_low) /
+                   (cfg.current_norm_high - cfg.current_norm_low)).astype("float32")
+        y = np.linspace(0.0, 1.0, n, dtype="float32")
+        sequence = Sequence("load_stats", x, y)
+
+        class Dummy(torch.nn.Module):
+            """返回固定q，避免测试依赖模型权重。"""
+
+            def forward(self, values):
+                return torch.zeros(values.shape[0])
+
+        fused = make_fused_sequences(Dummy(), [sequence], cfg, torch.device("cpu"))[0]
+        self.assertEqual(fused.x.shape[1], cfg.lstm_input_features)
+        self.assertEqual(fused.x.shape[1], 10)
+        current_scale = max(abs(cfg.current_norm_low), abs(cfg.current_norm_high))
+        expected_rms = np.sqrt(np.mean(raw_current[:16] ** 2)) / current_scale
+        np.testing.assert_allclose(
+            fused.x[0, 8:10],
+            np.asarray([expected_rms, 15.0 / 16.0], dtype="float32"),
+            rtol=0,
+            atol=1e-6,
+        )
+        altered = x.copy()
+        altered[25:, 1] = 100.0
+        changed = make_fused_sequences(
+            Dummy(), [Sequence("load_stats_changed", altered, y)], cfg, torch.device("cpu")
+        )[0]
+        np.testing.assert_array_equal(fused.x[:10, 8:10], changed.x[:10, 8:10])
+
     def test_lstm_input_expansion_preserves_old_weights(self):
         """新增历史统计列时，旧LSTM输入投影的已有列仍能warm-start。"""
         old_cfg = Config().smoke_config()

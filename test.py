@@ -48,11 +48,20 @@ def run(args):
         transformer, sequences, cfg, device, run_dir / "cache" / "test", t_sha
     )
     dataset = WindowDataset(fused, cfg.short_window, cfg.eval_stride)
-    # 第三步：选择尚不存在的结果目录，避免覆盖已有预测CSV和指标。
-    for i in range(100000):
-        output = run_dir / ("test" if i == 0 else f"test{i}")
-        if not output.exists():
-            break
+    # 第三步：选择输出目录。显式指定时用于把评价结果集中到独立子目录。
+    requested_output = getattr(args, "output", None)
+    if requested_output:
+        output = Path(requested_output).resolve()
+        if output.exists():
+            raise FileExistsError(f"测试输出目录已存在，请换一个路径: {output}")
+        # evaluate()负责创建最终输出目录，这里只准备其父目录。
+        output.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # 默认行为保留为run目录下的test、test1等，避免覆盖旧结果。
+        for i in range(100000):
+            output = run_dir / ("test" if i == 0 else f"test{i}")
+            if not output.exists():
+                break
     # 覆盖率按原始目标点计：每个评估窗口代表 stride 个点；冷启动前缀与长驻车切分不产生输出。
     raw_points = sum(len(s.y) for s in sequences)
     full_windows = sum(max(0, len(s.y) - cfg.short_window + 1) for s in fused)
@@ -78,6 +87,8 @@ def run(args):
         q_input_features=cfg.q_input_features,
         use_history_stats=cfg.use_history_stats,
         history_window_seconds=cfg.history_window_seconds,
+        use_load_stats=cfg.use_load_stats,
+        load_stats_window_seconds=cfg.load_stats_window_seconds,
         stride=cfg.eval_stride,
         first_valid_local_target=cfg.long_window + cfg.short_window - 2,
         sequence_names=[s.name for s in sequences],
@@ -101,6 +112,7 @@ def run(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True)
+    parser.add_argument("--output", help="可选的独立测试输出目录")
     parser.add_argument("--device")
     args = parser.parse_args()
     run(args)

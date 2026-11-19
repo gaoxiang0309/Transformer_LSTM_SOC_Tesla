@@ -185,6 +185,8 @@ def run(args):
             base_input_features=cfg.input_features,
             use_history_stats=cfg.use_history_stats,
             history_window_seconds=cfg.history_window_seconds,
+            use_load_stats=cfg.use_load_stats,
+            load_stats_window_seconds=cfg.load_stats_window_seconds,
             prediction_windows=len(dataset),
             first_valid_local_target=cfg.long_window + cfg.short_window - 2,
         )
@@ -225,6 +227,8 @@ def run(args):
         base_input_features=cfg.input_features,
         use_history_stats=cfg.use_history_stats,
         history_window_seconds=cfg.history_window_seconds,
+        use_load_stats=cfg.use_load_stats,
+        load_stats_window_seconds=cfg.load_stats_window_seconds,
     )
     (output_root / "robustness_config.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -238,6 +238,35 @@ def _history_statistics(values, window):
     ).astype(np.float32)
 
 
+def _current_normalization_bounds(cfg):
+    """读取训练侧电流归一化边界，缺少manifest时使用配置快照中的边界。"""
+    manifest_path = Path(cfg.processed_dir) / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        low = float(manifest["normalization"]["low"][1])
+        high = float(manifest["normalization"]["high"][1])
+        return low, high
+    return float(cfg.current_norm_low), float(cfg.current_norm_high)
+
+
+def _load_statistics(values, window, current_low, current_high):
+    """返回归一化的电流RMS和正电流比例，均只使用当前及过去数据。
+
+    RMS先在物理电流(A)上计算，再除以训练侧电流范围的最大绝对值，
+    使新增列与现有[0,1]左右的输入尺度相近。正电流比例使用I>0作为回馈方向。
+    """
+    if values.shape[1] < 2:
+        raise ValueError("负载统计特征需要至少包含V和I两列")
+    current = values[:, 1].astype(np.float64)
+    current = current * (current_high - current_low) + current_low
+    scale = max(abs(current_low), abs(current_high))
+    if scale <= 0:
+        raise ValueError("电流归一化范围不能覆盖零")
+    rms = np.sqrt(_rolling_mean(current * current, window)) / scale
+    positive_ratio = _rolling_mean((current > 0.0).astype(np.float64), window)
+    return np.column_stack([rms, positive_ratio]).astype(np.float32)
+
+
 def _perturb_ah(x, cfg, rng):
     """给输入第3列(Ah)注入 step/ramp 偏置并重归一化；V/I/T 与标签不变。
 
@@ -271,12 +300,16 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
     Transformer只读取前q_input_features列，因此可以比较q_Ah与q_v。
     ΔAh在完整序列上计算后再裁去Transformer预热前缀，避免边界处丢失已有历史。
     历史统计在完整序列上计算，追加列为[V_mean,I_mean,V_dev,I_dev]。
+    负载统计在完整序列上计算，追加列为[I_rms_60,I_pos_ratio_60]。
     perturb=True时仅对训练集输入注入Ah偏置，label保持干净。
     """
     transformer.to(device).eval()
     # eval关闭dropout；requires_grad_(False)冻结参数，两者作用不同。
     transformer.requires_grad_(False)
     rng = np.random.default_rng(cfg.perturb_seed or cfg.seed)
+    current_bounds = (
+        _current_normalization_bounds(cfg) if cfg.use_load_stats else None
+    )
     result = []
     skipped = []
     for sequence in sequences:
@@ -319,6 +352,15 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
         if cfg.use_history_stats:
             history_full = _history_statistics(seq.x, cfg.history_window)
             x = np.column_stack([x, history_full[first:]]).astype("float32")
+        if cfg.use_load_stats:
+            current_low, current_high = current_bounds
+            load_full = _load_statistics(
+                seq.x,
+                cfg.load_stats_window,
+                current_low,
+                current_high,
+            )
+            x = np.column_stack([x, load_full[first:]]).astype("float32")
         if x.shape[1] != cfg.lstm_input_features:
             raise ValueError(
                 f"融合特征列数{x.shape[1]}与lstm_input_features={cfg.lstm_input_features}不一致"
@@ -341,6 +383,8 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
                 q_input_features=np.asarray(cfg.q_input_features),
                 use_history_stats=np.asarray(cfg.use_history_stats),
                 history_window=np.asarray(cfg.history_window),
+                use_load_stats=np.asarray(cfg.use_load_stats),
+                load_stats_window=np.asarray(cfg.load_stats_window),
             )
     if skipped:
         print("因长窗口历史不足而跳过：", skipped, flush=True)

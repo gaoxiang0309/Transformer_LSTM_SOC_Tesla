@@ -11,6 +11,8 @@
 
 实验三在LSTM融合列末端追加60秒因果统计 `[V_mean_60,I_mean_60,V_dev_60,I_dev_60]`，输入维度变为12。
 
+实验四在q_Ah控制组基础上追加60秒负载统计 `[I_rms_60,I_pos_ratio_60]`，输入维度变为10，Transformer仍复用q_Ah控制组权重。
+
 ## 1. 本轮任务边界（对齐《BIT_SOC_数据窗口与状态划分》）
 
 | 决策 | 本项目的做法 |
@@ -135,6 +137,26 @@ python test.py --run run/train/exp_batch3_qah_history60 --device cuda:0
 python tools/evaluate_ramp_robustness.py --run run/train/exp_batch3_qah_history60 --split validation --device cuda:0
 python tools/compare_robustness.py --first <QAH_ANALYSIS_DIR> --second run/train/exp_batch3_qah_history60/analysis/ramp_robustness_validation --output qah_history60_robustness_comparison.csv
 ```
+
+## 实验四 60秒负载强度与回馈比例
+
+配置 `configs/exp_batch4_qah_loadstats60.json` 在 q_Ah 控制组基础上，向LSTM融合列追加 `I_rms_60` 和 `I_pos_ratio_60`。前者在物理电流上计算因果RMS后按训练侧电流范围缩放，后者是过去60秒正电流比例。Transformer继续复用q_Ah控制组权重，旧LSTM的前8列通过输入投影扩展warm-start，新增2列使用当前模型初始化。
+
+```bash
+python main.py --config configs/exp_batch4_qah_loadstats60.json --device cuda:0
+python test.py --run run/train/exp_batch4_qah_loadstats60 --device cuda:0
+python tools/evaluate_ramp_robustness.py --run run/train/exp_batch4_qah_loadstats60 --split validation --device cuda:0
+```
+
+实验四的特征公式、边界和完整输出结构见 [`docs/实验四_负载统计特征.md`](docs/实验四_负载统计特征.md)。
+
+实验四也支持一键完成训练、clean 测试、控制组 ramp、实验四 ramp 和配对比较。
+
+```bash
+python tools/run_exp4_evaluation.py --device cuda:0
+```
+
+一键评价结果写入 `run/train/exp_batch4_qah_loadstats60/analysis/exp4_evaluation/`。已有完整权重时会复用权重，重复评价会自动使用新的带序号子目录。
 
 ## 8. 正式训练、测试、绘图
 

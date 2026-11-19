@@ -100,7 +100,14 @@ class Config:
     use_history_stats: bool = False
     history_window_seconds: float = 60.0
     history_window: int = 60
-    # LSTM输入维度 = 输入特征 + q + (锚) + (2个ΔAh) + (4个历史统计)，由validate()派生。
+    # 实验四的负载统计，追加I_rms和I_pos_ratio两个因果特征。
+    use_load_stats: bool = False
+    load_stats_window_seconds: float = 60.0
+    load_stats_window: int = 60
+    # 当前通道的训练侧归一化范围。运行时优先从manifest读取，默认值对应现有processed数据。
+    current_norm_low: float = -9.226896409988404
+    current_norm_high: float = 7.542119511222679
+    # LSTM输入维度 = 输入特征 + q + (锚) + (2个ΔAh) + (4个历史统计) + (2个负载统计)，由validate()派生。
     lstm_input_features: int = 0
     # 归一化只在训练划分上拟合。
     # robust_minmax：每通道p0.01–p99.99截断后min-max到[0,1]；
@@ -206,6 +213,10 @@ class Config:
             raise ValueError("t_norm_high必须大于t_norm_low")
         if self.history_window_seconds <= 0:
             raise ValueError("history_window_seconds必须为正")
+        if self.load_stats_window_seconds <= 0:
+            raise ValueError("load_stats_window_seconds必须为正")
+        if self.current_norm_high <= self.current_norm_low:
+            raise ValueError("current_norm_high必须大于current_norm_low")
         # LSTM基础输入特征数由是否启用安时积分决定：3=[V,I,T]，4=[V,I,T,Ah]。
         self.input_features = 4 if self.use_ah_feature else 3
         # Transformer可以单独少读Ah，但不能读取基础输入之外的列。
@@ -222,12 +233,16 @@ class Config:
             + (1 if self.use_physics_anchor else 0)
             + (2 if self.use_delta_ah else 0)
             + (4 if self.use_history_stats else 0)
+            + (2 if self.use_load_stats else 0)
         )
         # 窗口按秒定义：点数 = 秒数 / 采样间隔，四舍五入到整数点。
         self.long_window = max(1, int(round(self.long_window_seconds / self.sample_interval_s)))
         self.short_window = max(1, int(round(self.short_window_seconds / self.sample_interval_s)))
         self.history_window = max(
             1, int(round(self.history_window_seconds / self.sample_interval_s))
+        )
+        self.load_stats_window = max(
+            1, int(round(self.load_stats_window_seconds / self.sample_interval_s))
         )
         if not (1 <= self.short_window < self.long_window):
             raise ValueError("需要 1 <= short_window < long_window")

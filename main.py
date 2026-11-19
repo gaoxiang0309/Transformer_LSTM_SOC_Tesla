@@ -80,6 +80,8 @@ def run(args):
             train_transformer=cfg.train_transformer,
             use_history_stats=cfg.use_history_stats,
             history_window_seconds=cfg.history_window_seconds,
+            use_load_stats=cfg.use_load_stats,
+            load_stats_window_seconds=cfg.load_stats_window_seconds,
             window_seconds=dict(
                 long=cfg.long_window_seconds, short=cfg.short_window_seconds
             ),
@@ -156,14 +158,14 @@ def run(args):
         )
         lstm = LSTMSOC(cfg)
         if cfg.init_lstm_from:
-            # 从旧权重warm-start。新增历史统计列时只扩展LSTM输入投影，旧列权重继续复用。
+            # 从旧权重warm-start。新增融合列时扩展LSTM输入投影，旧列权重继续复用。
             print("WARM-START LSTM from:", cfg.init_lstm_from, flush=True)
             restore(
                 lstm,
                 Path(cfg.init_lstm_from),
                 device,
                 strict=False,
-                allow_input_expansion=cfg.use_history_stats,
+                allow_input_expansion=cfg.use_history_stats or cfg.use_load_stats,
             )
         train_dataset = WindowDataset(fused_train, cfg.short_window, cfg.train_stride)
         validation_dataset = WindowDataset(fused_val, cfg.short_window, cfg.eval_stride)

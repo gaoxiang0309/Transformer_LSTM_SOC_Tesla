@@ -38,3 +38,14 @@ print("Transformer:", m["aggregate_transformer"])
 print("Collaborative:", m["aggregate_collaborative"])
 print("coverage:", m["coverage_ratio"], "windows:", m["prediction_windows"])
 PY
+
+# 8) 实验四：q_Ah控制组 + 60秒负载统计特征
+#    I_rms_60 与 I_pos_ratio_60 只追加到LSTM融合侧，Transformer复用q_Ah控制组权重。
+python main.py --config configs/exp_batch4_qah_loadstats60.json --device cuda:0 2>&1 | tee run_exp_batch4.log
+python test.py --run run/train/exp_batch4_qah_loadstats60 --device cuda:0 2>&1 | tee test_exp_batch4.log
+python tools/evaluate_ramp_robustness.py --run run/train/exp_batch4_qah_loadstats60 --split validation --device cuda:0 2>&1 | tee ramp_exp_batch4.log
+
+# 9) 实验四一键评价
+#    自动处理训练、clean测试、q_Ah控制组ramp、实验四ramp和配对比较。
+#    全部评价输出写入run/train/exp_batch4_qah_loadstats60/analysis/exp4_evaluation/。
+python tools/run_exp4_evaluation.py --device cuda:0

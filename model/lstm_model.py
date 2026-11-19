@@ -1,6 +1,6 @@
 """第二阶段模型：用短窗口估计当前SOC（物理锚 + 可学习混合/门控残差）。
 
-输入[B,K,F]的列依次为V、I、T、Ah、q，以及物理锚anchor和短/长窗ΔAh（按配置拼接）。
+输入[B,K,F]的列依次为V、I、T、Ah、q，以及物理锚anchor、短/长窗ΔAh、历史统计和负载统计（按配置拼接）。
 物理锚的使用方式由 cfg.anchor_mode 决定：
   hard = SOC = anchor + residual（锚权重恒为1，旧版）
   soft = SOC = residual（锚只作为输入特征）
@@ -14,12 +14,12 @@ from torch import nn
 
 
 class LSTMSOC(nn.Module):
-    """用[V,I,T,Ah,q,anchor,dAh]短窗口预测SOC的第二阶段模型（锚+混合/门控残差）。"""
+    """用融合输入短窗口预测SOC的第二阶段模型（锚+混合/门控残差）。"""
 
     def __init__(self, cfg):
         """建立单向LSTM、残差回归头和可选门控/混合头。"""
         super().__init__()
-        # LSTM输入维度由config派生：输入特征 + q + 可选anchor + 2个ΔAh。
+        # LSTM输入维度由config派生，附加列由配置开关控制。
         self.input_features = cfg.input_features
         self.lstm_input_features = cfg.lstm_input_features
         self.use_physics_anchor = cfg.use_physics_anchor
