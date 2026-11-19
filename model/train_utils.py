@@ -255,9 +255,13 @@ def make_fused_sequences(transformer, sequences, cfg, device, cache_dir=None, ch
             anchor = (float(q[0]) - float(coulomb[0])) + coulomb
             x = np.column_stack([x, anchor]).astype("float32")
         if cfg.use_delta_ah:
-            ah_raw = base_x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
-            d_short = _rolling_delta(ah_raw, cfg.short_window)
-            d_long = _rolling_delta(ah_raw, cfg.long_window)
+            # 在裁切前计算完整序列的历史差分，再同步裁切到q的有效起点，
+            # 避免边界处ΔAh（尤其ΔAh_L）被截断为0。
+            full_ah_raw = seq.x[:, 3] * (cfg.ah_norm_high - cfg.ah_norm_low) + cfg.ah_norm_low
+            d_short_full = _rolling_delta(full_ah_raw, cfg.short_window)
+            d_long_full = _rolling_delta(full_ah_raw, cfg.long_window)
+            d_short = d_short_full[first:]
+            d_long = d_long_full[first:]
             x = np.column_stack([x, d_short, d_long]).astype("float32")
         if x.shape[1] != cfg.lstm_input_features:
             raise ValueError(
